@@ -13,6 +13,16 @@ router.get('/status', auth, async (req, res) => {
     const user = await User.findById(req.user._id)
     const isPro = user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date()
 
+    // Agar Pro expire ho gaya toh isPro false karo aur invoiceCount reset karo
+    if (!isPro && user.isPro) {
+      await User.findByIdAndUpdate(req.user._id, {
+        isPro: false,
+        invoiceCount: 0
+      })
+      user.invoiceCount = 0
+      user.isPro = false
+    }
+
     res.json({
       invoiceCount: user.invoiceCount || 0,
       freeLimit: FREE_LIMIT,
@@ -31,6 +41,16 @@ router.post('/generate', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
     const isPro = user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date()
+
+    // Agar Pro expire ho gaya toh isPro false karo aur invoiceCount reset karo
+    if (!isPro && user.isPro) {
+      await User.findByIdAndUpdate(req.user._id, {
+        isPro: false,
+        invoiceCount: 0
+      })
+      user.invoiceCount = 0
+      user.isPro = false
+    }
 
     // Limit check
     if (!isPro && (user.invoiceCount || 0) >= FREE_LIMIT) {

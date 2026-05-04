@@ -145,12 +145,14 @@ router.post('/verify', auth, async (req, res) => {
     const proExpiry = new Date()
     proExpiry.setDate(proExpiry.getDate() + plan.days)
 
+    // invoiceCount reset karo jab Pro activate ho — taaki expiry ke baad fresh 3 free milein
     await User.findByIdAndUpdate(req.user._id, {
       isPro: true,
       proExpiry,
       freeLimit: 999999,
       lastPlanId: planId,
-      lastPaymentId: razorpay_payment_id
+      lastPaymentId: razorpay_payment_id,
+      invoiceCount: 0   // ✅ Reset on Pro activation
     })
 
     res.json({
