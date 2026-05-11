@@ -16,29 +16,29 @@ const PLANS = {
   monthly: {
     id: 'monthly',
     name: 'Pro Monthly',
-    amount: 1900,
+    amount: 4900,          // ✅ FIXED: ₹49 = 4900 paise
     currency: 'INR',
     days: 30,
-    label: '₹19/month',
-    razorpayPlanId: process.env.RAZORPAY_PLAN_MONTHLY   // 🆕 Razorpay Dashboard pe banao
+    label: '₹49/month',
+    razorpayPlanId: process.env.RAZORPAY_PLAN_MONTHLY
   },
   quarterly: {
     id: 'quarterly',
     name: 'Pro Quarterly',
-    amount: 4900,
+    amount: 12900,         // ✅ FIXED: ₹129 = 12900 paise
     currency: 'INR',
     days: 90,
-    label: '₹49/quarter',
-    razorpayPlanId: process.env.RAZORPAY_PLAN_QUARTERLY // 🆕 Razorpay Dashboard pe banao
+    label: '₹129/3 months',
+    razorpayPlanId: process.env.RAZORPAY_PLAN_QUARTERLY
   },
   yearly: {
     id: 'yearly',
     name: 'Pro Yearly',
-    amount: 19900,
+    amount: 39900,         // ✅ FIXED: ₹399 = 39900 paise
     currency: 'INR',
     days: 365,
-    label: '₹199/year',
-    razorpayPlanId: process.env.RAZORPAY_PLAN_YEARLY    // 🆕 Razorpay Dashboard pe banao
+    label: '₹399/year',
+    razorpayPlanId: process.env.RAZORPAY_PLAN_YEARLY
   }
 }
 
@@ -179,18 +179,17 @@ router.post('/verify', auth, async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
-//  🆕 AUTO PAY ROUTES — Razorpay Subscriptions
+//  AUTO PAY ROUTES — Razorpay Subscriptions
 // ═══════════════════════════════════════════════════════════════
 
 // ─── POST /create-subscription ───────────────────────────────────
-// Frontend se call karo jab user "Auto Pay" choose kare
 router.post('/create-subscription', auth, async (req, res) => {
   try {
     const { planId } = req.body
     const plan = PLANS[planId]
 
     if (!plan) return res.status(400).json({ error: 'Invalid plan' })
-    if (!plan.razorpayPlanId) return res.status(400).json({ error: 'Auto Pay is plan ke liye available nahi' })
+    if (!plan.razorpayPlanId) return res.status(400).json({ error: 'Auto Pay is plan ke liye available nahi — env variable missing hai' })
 
     // Agar user ki pehle se koi active subscription hai, cancel karo
     const user = await User.findById(req.user._id)
@@ -204,16 +203,15 @@ router.post('/create-subscription', auth, async (req, res) => {
 
     const subscription = await razorpay.subscriptions.create({
       plan_id: plan.razorpayPlanId,
-      total_count: 12,          // max 12 cycles (monthly=1yr, quarterly=3yr, yearly=12yr)
+      total_count: 12,
       quantity: 1,
-      customer_notify: 1,       // Razorpay khud SMS/email bhejega
+      customer_notify: 1,
       notes: {
         userId: req.user._id.toString(),
         planId
       }
     })
 
-    // DB mein subscriptionId save karo (pending state mein)
     await User.findByIdAndUpdate(req.user._id, {
       subscriptionId: subscription.id,
       subscriptionStatus: 'created',
@@ -233,7 +231,6 @@ router.post('/create-subscription', auth, async (req, res) => {
 })
 
 // ─── POST /verify-subscription ───────────────────────────────────
-// Pehli payment ke baad frontend se call karo
 router.post('/verify-subscription', auth, async (req, res) => {
   try {
     const {
@@ -242,7 +239,6 @@ router.post('/verify-subscription', auth, async (req, res) => {
       razorpay_signature
     } = req.body
 
-    // Signature verify karo
     const sign = razorpay_payment_id + '|' + razorpay_subscription_id
     const expectedSign = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -280,7 +276,6 @@ router.post('/verify-subscription', auth, async (req, res) => {
 })
 
 // ─── POST /cancel-subscription ───────────────────────────────────
-// User jab cancel kare
 router.post('/cancel-subscription', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
@@ -289,12 +284,10 @@ router.post('/cancel-subscription', auth, async (req, res) => {
       return res.status(400).json({ error: 'Koi active subscription nahi mili' })
     }
 
-    // cancel_at_cycle_end: true — current cycle khatam hone tak Pro rahega
     await razorpay.subscriptions.cancel(user.subscriptionId, { cancel_at_cycle_end: 1 })
 
     await User.findByIdAndUpdate(req.user._id, {
       subscriptionStatus: 'cancelled'
-      // isPro aur proExpiry touch nahi kiye — expiry tak Pro rahega
     })
 
     res.json({
@@ -329,16 +322,16 @@ router.get('/subscription-status', auth, async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
-//  🆕 WEBHOOK — Razorpay automatic renewals handle karo
+//  WEBHOOK — Razorpay automatic renewals handle karo
 //  Route: POST /api/payment/webhook
-//  Razorpay Dashboard mein yeh URL add karo
+//  Razorpay Dashboard mein yeh URL add karo:
+//  https://zerofy-backend.vercel.app/api/payment/webhook
 // ═══════════════════════════════════════════════════════════════
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET
     const signature = req.headers['x-razorpay-signature']
 
-    // Webhook signature verify karo
     const expectedSign = crypto
       .createHmac('sha256', webhookSecret)
       .update(req.body)
@@ -356,7 +349,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
     switch (event.event) {
 
-      // ✅ Automatic renewal successful
       case 'subscription.charged': {
         const sub = payload.subscription.entity
         const payment = payload.payment.entity
@@ -382,7 +374,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         break
       }
 
-      // ❌ Payment fail — grace period do, isPro false mat karo abhi
       case 'subscription.halted': {
         const sub = payload.subscription.entity
         const userId = sub.notes?.userId
@@ -391,15 +382,12 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
         await User.findByIdAndUpdate(userId, {
           subscriptionStatus: 'halted'
-          // isPro abhi false nahi kiya — user ko retry ka time do
         })
 
         console.log(`⚠️ Subscription halted: ${userId}`)
-        // TODO: Email/push notification bhejo user ko
         break
       }
 
-      // 🚫 User ne cancel kiya ya cycle end pe cancel
       case 'subscription.cancelled': {
         const sub = payload.subscription.entity
         const userId = sub.notes?.userId
@@ -408,14 +396,12 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
         await User.findByIdAndUpdate(userId, {
           subscriptionStatus: 'cancelled'
-          // isPro proExpiry tak true rahega
         })
 
         console.log(`❌ Subscription cancelled: ${userId}`)
         break
       }
 
-      // subscription.activated — pehli baar active
       case 'subscription.activated': {
         const sub = payload.subscription.entity
         const userId = sub.notes?.userId
