@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema({
   lastPaymentId: { type: String, default: null },        // 🆕 last Razorpay payment ID
   subscriptionId: { type: String, default: null },       // 🆕 Razorpay subscription ID
   subscriptionStatus: { type: String, default: null },   // 🆕 created | active | halted | cancelled
+  businesses: { type: Array, default: [] },              // saved business profiles
 }, { timestamps: true })
 
 module.exports = mongoose.model('User', userSchema)
