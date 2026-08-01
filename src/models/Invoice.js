@@ -29,6 +29,9 @@ const invoiceSchema = new mongoose.Schema({
   bizAddr: { type: String, default: '' },
 
   // Client info
+  // customerId set hoga agar ye invoice ek saved Customer se linked hai.
+  // Purane invoices mein ye null rahega — clientName/etc. flat fields se hi kaam chalega (backward compatible).
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null, index: true },
   clientName: { type: String, default: '' },
   clientEmail: { type: String, default: '' },
   clientPhone: { type: String, default: '' },
