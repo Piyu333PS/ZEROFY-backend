@@ -8,6 +8,7 @@ const userRoutes = require('./src/routes/user')
 const resumeRoutes = require('./src/routes/resume')
 const paymentRoutes = require('./src/routes/payment')
 const invoiceRoutes = require('./src/routes/invoices')
+const customerRoutes = require('./src/routes/customers')
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -30,6 +31,7 @@ app.use('/api/user', userRoutes)
 app.use('/api/resume', resumeRoutes)
 app.use('/api/payment', paymentRoutes)
 app.use('/api/invoices', invoiceRoutes)
+app.use('/api/customers', customerRoutes)
 
 // Health check
 app.get('/', (req, res) => res.json({ status: 'Zerofy Backend Running ✅' }))
