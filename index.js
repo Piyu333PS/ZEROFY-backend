@@ -27,6 +27,33 @@ app.use(cors({
 }))
 app.use(express.json())
 
+// MongoDB connect
+let dbPromise = null
+const connectDB = () => {
+  if (mongoose.connection.readyState === 1) return Promise.resolve()
+  if (!dbPromise) {
+    dbPromise = mongoose.connect(process.env.MONGODB_URI)
+      .then(() => console.log('MongoDB connected ✅'))
+      .catch(err => {
+        dbPromise = null  // agli request phir se try kare
+        console.error('MongoDB connection error:', err)
+        throw err
+      })
+  }
+  return dbPromise
+}
+
+// Har request se pehle ensure karo DB connected hai — isse cold-start ke time
+// connection abhi ban hi raha ho to request usse pehle fail nahi hogi
+app.use(async (req, res, next) => {
+  try {
+    await connectDB()
+    next()
+  } catch (err) {
+    res.status(503).json({ error: 'Database abhi available nahi hai, thodi der mein try karo' })
+  }
+})
+
 // Routes
 app.use('/api/auth', authRoutes)
 app.use('/api/user', userRoutes)
@@ -40,16 +67,7 @@ app.use('/api/dashboard', dashboardRoutes)
 // Health check
 app.get('/', (req, res) => res.json({ status: 'Zerofy Backend Running ✅' }))
 
-// MongoDB connect
-let isConnected = false
-const connectDB = async () => {
-  if (isConnected) return
-  await mongoose.connect(process.env.MONGODB_URI)
-  isConnected = true
-  console.log('MongoDB connected ✅')
-}
-
-connectDB().catch(err => console.error('MongoDB connection error:', err))
+connectDB().catch(() => {})  // warm-up attempt, request middleware upar already retry karega
 
 // Local server (Vercel pe ye nahi chalega, but local dev ke liye)
 if (process.env.NODE_ENV !== 'production') {
