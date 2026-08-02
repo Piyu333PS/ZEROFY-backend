@@ -84,8 +84,9 @@ router.post('/', auth, async (req, res) => {
   try {
     const data = req.body
 
-    // Agar same invoice number pehle se hai toh update karo
-    const existing = await Invoice.findOne({ userId: req.user._id, no: data.no })
+    // Agar isi business ke andar same invoice number pehle se hai toh update karo
+    // (bizId bhi match karna zaroori hai — warna alag business ka invoice overwrite ho jata hai)
+    const existing = await Invoice.findOne({ userId: req.user._id, bizId: data.bizId || null, no: data.no })
     if (existing) {
       const updated = await Invoice.findByIdAndUpdate(
         existing._id,
