@@ -46,7 +46,8 @@ const invoiceSchema = new mongoose.Schema({
 
 }, { timestamps: true })
 
-// Ek user ke liye invoice number unique hona chahiye
-invoiceSchema.index({ userId: 1, no: 1 }, { unique: true })
+// Invoice number unique hona chahiye — lekin per-business, taaki alag businesses
+// same number (jaise INV-2026-001) alag-alag use kar sakein bina ek dusre ko overwrite kiye
+invoiceSchema.index({ userId: 1, bizId: 1, no: 1 }, { unique: true })
 
 module.exports = mongoose.model('Invoice', invoiceSchema)
