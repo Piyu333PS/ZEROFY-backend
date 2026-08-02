@@ -143,6 +143,7 @@ router.get('/businesses', auth, async (req, res) => {
     const user = await User.findById(req.user._id).lean()
     res.json({ success: true, businesses: user.businesses || [] })
   } catch (err) {
+    console.error('GET /businesses error:', err)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -151,10 +152,14 @@ router.get('/businesses', auth, async (req, res) => {
 // Businesses save karo
 router.put('/businesses', auth, async (req, res) => {
   try {
+    if (!Array.isArray(req.body.businesses)) {
+      return res.status(400).json({ error: 'businesses array bhejna zaroori hai' })
+    }
     await User.findByIdAndUpdate(req.user._id, { businesses: req.body.businesses })
     res.json({ success: true })
   } catch (err) {
-    res.status(500).json({ error: 'Server error' })
+    console.error('PUT /businesses error:', err)
+    res.status(500).json({ error: 'Server error', detail: err.message })
   }
 })
 
