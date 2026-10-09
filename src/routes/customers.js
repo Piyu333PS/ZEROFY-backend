@@ -5,7 +5,7 @@ const auth = require('../middleware/authLite')
 const Customer = require('../models/Customer')
 const Invoice = require('../models/Invoice')
 const Payment = require('../models/Payment')
-const { invoiceTotal, r2 } = require('../utils/invoiceCalc')
+const { buildLedger, docTypeOf } = require('../utils/ledger')
 
 const router = express.Router()
 
@@ -83,32 +83,13 @@ router.get('/', auth, async (req, res) => {
       Payment.find({ userId: req.user._id }).lean(),
     ])
 
-    const paidByInvoice = {}
-    for (const p of payments) {
-      const k = String(p.invoiceId)
-      paidByInvoice[k] = (paidByInvoice[k] || 0) + (Number(p.amount) || 0)
-    }
-    const agg = {}
-    for (const inv of invoices) {
-      if (!inv.customerId || inv.status === 'cancelled' || inv.status === 'draft') continue
-      const k = String(inv.customerId)
-      if (!agg[k]) agg[k] = { invoiceCount: 0, billed: 0, received: 0 }
-      agg[k].invoiceCount += 1
-      agg[k].billed += invoiceTotal(inv)
-      agg[k].received += paidByInvoice[String(inv._id)] || 0
-    }
+    const { byCustomer: agg } = buildLedger(invoices, payments)
 
     res.json({
       success: true,
       customers: customers.map(c => {
-        const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0 }
-        return {
-          ...c,
-          invoiceCount: a.invoiceCount,
-          billed: r2(a.billed),
-          received: r2(a.received),
-          outstanding: r2(Math.max(0, a.billed - a.received)),
-        }
+        const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0 }
+        return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding }
       })
     })
   } catch (err) {
@@ -214,7 +195,7 @@ router.get('/:id', auth, async (req, res) => {
       .sort({ createdAt: -1 })
       .lean()
 
-    res.json({ success: true, customer, invoices })
+    res.json({ success: true, customer, invoices: invoices.filter(d => docTypeOf(d) === 'invoice') })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })

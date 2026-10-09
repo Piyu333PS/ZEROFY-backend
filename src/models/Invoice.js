@@ -18,13 +18,16 @@ const invoiceItemSchema = new mongoose.Schema({
 const invoiceSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
 
+  // 'invoice' | 'quotation' | 'credit_note' — missing on older documents, which are invoices
+  docType: { type: String, enum: ['invoice', 'quotation', 'credit_note'], default: 'invoice', index: true },
+
   // Invoice details
   no: { type: String, required: true, trim: true },
   date: { type: String },
   dueDate: { type: String, default: '' },
   poNumber: { type: String, default: '' },
   // 'overdue' kabhi store nahi hota (due date se nikalta hai) — enum mein sirf purane clients ke liye hai
-  status: { type: String, enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled'], default: 'draft' },
+  status: { type: String, enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled', 'accepted', 'declined', 'converted', 'issued'], default: 'draft' },
   template: { type: String, default: 'modern' },
   currency: { type: String, default: '₹' },
 
@@ -56,6 +59,19 @@ const invoiceSchema = new mongoose.Schema({
   shipping: { type: Number, default: 0 },
   roundOff: { type: Boolean, default: false },
   grandTotal: { type: Number, default: 0 },       // server-side calculated, har save par update hota hai
+
+  // Quotation only
+  validTill: { type: String, default: '' },
+  convertedInvoiceId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  convertedInvoiceNo: { type: String, default: '' },
+  // Invoice made from a quotation
+  fromQuotationId: { type: mongoose.Schema.Types.ObjectId, default: null },
+  fromQuotationNo: { type: String, default: '' },
+  // Credit note only — the invoice it reduces
+  refInvoiceId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
+  refInvoiceNo: { type: String, default: '' },
+  refInvoiceDate: { type: String, default: '' },
+  reason: { type: String, default: '' },
 
   notes: { type: String, default: '' },
   terms: { type: String, default: '' },

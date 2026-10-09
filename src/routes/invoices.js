@@ -6,11 +6,20 @@ const Payment = require('../models/Payment')
 const Customer = require('../models/Customer')
 const { calcInvoice, r2 } = require('../utils/invoiceCalc')
 const { rememberItems } = require('../utils/catalog')
+const { docTypeOf, paidMapOf, creditMapOf, decorateInvoice, decorateOther, settledStatus } = require('../utils/ledger')
+const { syncInvoiceStatus } = require('./payments')
 
 const router = express.Router()
 
 const FREE_LIMIT = 3
-const STATUSES = ['draft', 'sent', 'paid', 'cancelled']
+// Which statuses the app may set, per document type. A quotation becomes 'converted' only on the server.
+const STATUSES = {
+  invoice: ['draft', 'sent', 'paid', 'cancelled'],
+  quotation: ['draft', 'sent', 'accepted', 'declined'],
+  credit_note: ['issued', 'cancelled'],
+}
+const DEFAULT_STATUS = { invoice: 'draft', quotation: 'sent', credit_note: 'issued' }
+const LABEL = { invoice: 'Invoice', quotation: 'Quotation', credit_note: 'Credit note' }
 
 // Client se sirf yehi fields accept honge — userId / customerId / grandTotal jaise
 // fields request body se kabhi set nahi ho sakte
@@ -20,6 +29,7 @@ const INVOICE_FIELDS = [
   'clientName', 'clientEmail', 'clientPhone', 'clientGst', 'clientAddr', 'placeOfSupply',
   'items', 'discPct', 'taxPct', 'shipping', 'roundOff',
   'notes', 'terms', 'bankDetails', 'upiId', 'signatory',
+  'validTill', 'reason',
 ]
 const ITEM_FIELDS = ['id', 'type', 'desc', 'hsnSac', 'uqc', 'qty', 'rate', 'gstRate', 'hsn', 'gst']
 const MAX_LOGO_CHARS = 150000 // ~110 KB image
@@ -29,7 +39,7 @@ const num = (v, fallback = 0) => {
   return isNaN(n) ? fallback : n
 }
 
-function cleanInvoiceBody(body = {}) {
+function cleanInvoiceBody(body = {}, docType = 'invoice') {
   const out = {}
   for (const k of INVOICE_FIELDS) {
     if (body[k] !== undefined) out[k] = body[k]
@@ -37,7 +47,11 @@ function cleanInvoiceBody(body = {}) {
   if (out.no !== undefined) out.no = String(out.no).trim()
   if (out.bizId === undefined || out.bizId === '') delete out.bizId
   if (out.status === 'overdue') out.status = 'sent'
-  if (out.status !== undefined && !STATUSES.includes(out.status)) delete out.status
+  if (out.status !== undefined && !STATUSES[docType].includes(out.status)) delete out.status
+  if (out.validTill !== undefined) out.validTill = String(out.validTill || '').slice(0, 10)
+  if (out.reason !== undefined) out.reason = String(out.reason || '').slice(0, 300)
+  if (docType !== 'quotation') delete out.validTill
+  if (docType !== 'credit_note') delete out.reason
   if (out.discPct !== undefined) out.discPct = Math.min(100, Math.max(0, num(out.discPct)))
   if (out.taxPct !== undefined) out.taxPct = num(out.taxPct, 18)
   if (out.shipping !== undefined) out.shipping = Math.max(0, num(out.shipping))
@@ -109,23 +123,49 @@ async function findOrCreateCustomer(userId, inv) {
   return created._id
 }
 
-// Har invoice ke saath uska total / paid / balance jod do
-function decorate(invoice, paidByInvoice) {
-  const total = calcInvoice(invoice).total
-  const paid = r2(paidByInvoice[String(invoice._id)] || 0)
-  return { ...invoice, grandTotal: total, paidAmount: paid, balance: r2(Math.max(0, total - paid)) }
+// Add total / paid / credited / balance to one document
+async function decorateOne(userId, doc) {
+  if (docTypeOf(doc) !== 'invoice') return decorateOther(doc)
+  const [payments, notes] = await Promise.all([
+    Payment.find({ userId, invoiceId: doc._id }).lean(),
+    Invoice.find({ userId, refInvoiceId: doc._id }).lean(),
+  ])
+  return decorateInvoice(doc, paidMapOf(payments), creditMapOf(notes))
 }
 
-async function paidMap(userId, invoiceId) {
-  const filter = { userId }
-  if (invoiceId) filter.invoiceId = invoiceId
-  const payments = await Payment.find(filter).lean()
-  const map = {}
-  for (const p of payments) {
-    const k = String(p.invoiceId)
-    map[k] = (map[k] || 0) + (Number(p.amount) || 0)
+const sameId = (a, b) => String(a || '') === String(b || '')
+
+async function findOwned(userId, id) {
+  if (!id) return null
+  try { return await Invoice.findOne({ _id: id, userId }).lean() } catch { return null }
+}
+
+// A credit note must point at a real, issued invoice and cannot be worth more than
+// what is still left on that invoice after earlier credit notes.
+async function checkCreditNote(userId, data, refInvoiceId, selfId) {
+  const ref = await findOwned(userId, refInvoiceId)
+  if (!ref || docTypeOf(ref) !== 'invoice') return { error: 'Choose the invoice this credit note is for' }
+  if (ref.status === 'draft') return { error: 'A credit note cannot be made for a draft invoice. Edit the draft instead.' }
+  if (ref.status === 'cancelled') return { error: 'A credit note cannot be made for a cancelled invoice' }
+  const total = calcInvoice(data).total
+  if (!(total > 0)) return { error: 'The credit note amount must be more than 0' }
+  const notes = await Invoice.find({ userId, refInvoiceId: ref._id }).lean()
+  const others = creditMapOf(notes.filter(n => !sameId(n._id, selfId)))[String(ref._id)] || 0
+  const room = r2(calcInvoice(ref).total - others)
+  if (total > room + 0.01) {
+    return { error: room > 0
+      ? `This is more than the invoice. Up to ${room.toFixed(2)} can still be credited on ${ref.no}.`
+      : `Invoice ${ref.no} has already been credited in full.` }
   }
-  return map
+  return { ref }
+}
+
+async function syncRefInvoice(userId, refInvoiceId) {
+  if (!refInvoiceId) return
+  try {
+    const ref = await Invoice.findOne({ _id: refInvoiceId, userId })
+    if (ref) await syncInvoiceStatus(ref)
+  } catch (e) { console.error('Credit note sync error:', e) }
 }
 
 // ─── GET /api/invoices/status ─────────────────────────────────
@@ -215,15 +255,19 @@ router.put('/businesses', auth, async (req, res) => {
   }
 })
 
-// ─── GET /api/invoices ────────────────────────────────────────
-// Sabhi invoices fetch karo (us user ki) — har ek ke saath grandTotal / paidAmount / balance
+// ─── GET /api/invoices?docType=invoice|quotation|credit_note ──
+// Documents of one type (invoices when not given). Invoices come with grandTotal / paidAmount / creditedAmount / balance.
 router.get('/', auth, async (req, res) => {
   try {
-    const [invoices, paid] = await Promise.all([
+    const want = STATUSES[req.query.docType] ? req.query.docType : 'invoice'
+    const [docs, payments] = await Promise.all([
       Invoice.find({ userId: req.user._id }).sort({ createdAt: -1 }).lean(),
-      paidMap(req.user._id),
+      Payment.find({ userId: req.user._id }).lean(),
     ])
-    res.json({ success: true, invoices: invoices.map(inv => decorate(inv, paid)) })
+    const paid = paidMapOf(payments), credit = creditMapOf(docs)
+    const list = docs.filter(d => docTypeOf(d) === want)
+      .map(d => want === 'invoice' ? decorateInvoice(d, paid, credit) : decorateOther(d))
+    res.json({ success: true, invoices: list })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -236,20 +280,45 @@ router.get('/', auth, async (req, res) => {
 //  - body.countUsage === true ho to free-plan limit yahin check + count hoti hai
 router.post('/', auth, async (req, res) => {
   try {
-    const data = cleanInvoiceBody(req.body)
-    if (!data.no) return res.status(400).json({ error: 'Invoice number is required' })
+    const docType = STATUSES[req.body.docType] ? req.body.docType : 'invoice'
+    const label = LABEL[docType]
+    const data = cleanInvoiceBody(req.body, docType)
+    data.docType = docType
+    if (!data.status) data.status = DEFAULT_STATUS[docType]
+    if (!data.no) return res.status(400).json({ error: `${label} number is required` })
     if (!String(data.clientName || '').trim()) return res.status(400).json({ error: 'Client name is required' })
 
     const existing = await Invoice.findOne({ userId: req.user._id, bizId: data.bizId || null, no: data.no })
     if (existing) {
       return res.status(409).json({
         error: 'duplicate_number',
-        message: `Invoice number ${data.no} is already used for this business. Enter a different number.`
+        message: `Number ${data.no} is already used for this business. Enter a different number.`
       })
     }
 
+    let refInvoice = null
+    if (docType === 'credit_note') {
+      const check = await checkCreditNote(req.user._id, data, req.body.refInvoiceId, null)
+      if (check.error) return res.status(400).json({ error: check.error })
+      refInvoice = check.ref
+      data.refInvoiceId = refInvoice._id
+      data.refInvoiceNo = refInvoice.no
+      data.refInvoiceDate = refInvoice.date || ''
+    }
+
+    let quotation = null
+    if (docType === 'invoice' && req.body.fromQuotationId) {
+      quotation = await findOwned(req.user._id, req.body.fromQuotationId)
+      if (quotation && docTypeOf(quotation) === 'quotation') {
+        data.fromQuotationId = quotation._id
+        data.fromQuotationNo = quotation.no
+      } else quotation = null
+    }
+
+    // Only invoices count towards the free plan — quotations and credit notes are free
+    const countUsage = docType === 'invoice' && req.body.countUsage === true
     let invoiceCount
-    if (req.body.countUsage === true) {
+    if (countUsage) {
       const user = await User.findById(req.user._id)
       const isPro = await refreshProState(user)
       if (!isPro && (user.invoiceCount || 0) >= FREE_LIMIT) {
@@ -265,23 +334,33 @@ router.post('/', auth, async (req, res) => {
 
     const invoice = new Invoice({ ...data, userId: req.user._id })
     invoice.grandTotal = calcInvoice(data).total
-    const [customerId] = await Promise.all([
-      findOrCreateCustomer(req.user._id, data),
-      rememberItems(req.user._id, data.items),
-    ])
-    invoice.customerId = customerId
+    if (refInvoice && refInvoice.customerId) {
+      invoice.customerId = refInvoice.customerId
+    } else {
+      const [customerId] = await Promise.all([
+        findOrCreateCustomer(req.user._id, data),
+        docType === 'credit_note' ? null : rememberItems(req.user._id, data.items),
+      ])
+      invoice.customerId = customerId
+    }
     await invoice.save()
 
-    // Count tabhi badhao jab invoice sach mein save ho gaya ho
-    if (req.body.countUsage === true) {
+    // Count only after the invoice is really saved
+    if (countUsage) {
       await User.findByIdAndUpdate(req.user._id, { $inc: { invoiceCount: 1 } })
     }
+    if (quotation) {
+      await Invoice.findByIdAndUpdate(quotation._id, {
+        status: 'converted', convertedInvoiceId: invoice._id, convertedInvoiceNo: invoice.no,
+      })
+    }
+    if (refInvoice) await syncRefInvoice(req.user._id, refInvoice._id)
 
-    res.json({ success: true, invoice: decorate(invoice.toObject(), {}), invoiceCount })
+    res.json({ success: true, invoice: await decorateOne(req.user._id, invoice.toObject()), invoiceCount })
   } catch (err) {
     console.error(err)
     if (err && err.code === 11000) {
-      return res.status(409).json({ error: 'duplicate_number', message: 'This invoice number is already used.' })
+      return res.status(409).json({ error: 'duplicate_number', message: 'This number is already used.' })
     }
     res.status(500).json({ error: 'Server error' })
   }
@@ -292,8 +371,7 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, userId: req.user._id }).lean()
     if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
-    const paid = await paidMap(req.user._id, invoice._id)
-    res.json({ success: true, invoice: decorate(invoice, paid) })
+    res.json({ success: true, invoice: await decorateOne(req.user._id, invoice) })
   } catch (err) {
     res.status(404).json({ error: 'Invoice not found' })
   }
@@ -303,13 +381,17 @@ router.get('/:id', auth, async (req, res) => {
 // Invoice update karo (status change, edit, etc.)
 router.put('/:id', auth, async (req, res) => {
   try {
-    const current = await Invoice.findOne({ _id: req.params.id, userId: req.user._id }).lean()
+    const current = await findOwned(req.user._id, req.params.id)
     if (!current) return res.status(404).json({ error: 'Invoice not found' })
+    const docType = docTypeOf(current) // the type of a document never changes
+    const label = LABEL[docType]
 
-    const data = cleanInvoiceBody(req.body)
-    if (data.no !== undefined && !data.no) return res.status(400).json({ error: 'Invoice number is required' })
+    const data = cleanInvoiceBody(req.body, docType)
+    if (data.no !== undefined && !data.no) return res.status(400).json({ error: `${label} number is required` })
+    // A converted quotation stays converted while its invoice exists
+    if (docType === 'quotation' && current.status === 'converted') delete data.status
 
-    // Number ya business badla ho to duplicate check
+    // Duplicate check when the number or business changes
     const nextNo = data.no !== undefined ? data.no : current.no
     const nextBiz = data.bizId !== undefined ? data.bizId : (current.bizId || null)
     if (nextNo !== current.no || nextBiz !== (current.bizId || null)) {
@@ -317,7 +399,7 @@ router.put('/:id', auth, async (req, res) => {
       if (clash && String(clash._id) !== String(current._id)) {
         return res.status(409).json({
           error: 'duplicate_number',
-          message: `Invoice number ${nextNo} is already used for this business. Enter a different number.`
+          message: `Number ${nextNo} is already used for this business. Enter a different number.`
         })
       }
     }
@@ -326,30 +408,46 @@ router.put('/:id', auth, async (req, res) => {
     const total = calcInvoice(merged).total
     data.grandTotal = total
 
-    // Status ko payments ke saath consistent rakho
-    const paid = await paidMap(req.user._id, current._id)
-    const paidAmount = r2(paid[String(current._id)] || 0)
-    if (merged.status !== 'cancelled' && merged.status !== 'draft') {
-      if (paidAmount > 0 && paidAmount >= total - 0.01) data.status = 'paid'
-      else if (merged.status === 'paid' && paidAmount < total - 0.01 && data.status === undefined) data.status = 'sent'
+    if (docType === 'credit_note' && merged.status !== 'cancelled') {
+      const check = await checkCreditNote(req.user._id, merged, current.refInvoiceId, current._id)
+      if (check.error) return res.status(400).json({ error: check.error })
     }
 
-    if (data.clientName !== undefined || !current.customerId) {
+    if (docType === 'invoice') {
+      // Keep the status in step with payments and credit notes
+      const [payments, notes] = await Promise.all([
+        Payment.find({ userId: req.user._id, invoiceId: current._id }).lean(),
+        Invoice.find({ userId: req.user._id, refInvoiceId: current._id }).lean(),
+      ])
+      const paidAmount = paidMapOf(payments)[String(current._id)] || 0
+      const credited = creditMapOf(notes)[String(current._id)] || 0
+      if (merged.status !== 'cancelled' && merged.status !== 'draft') {
+        const settled = settledStatus(merged, paidAmount, credited)
+        if (settled === 'paid') data.status = 'paid'
+        else if (merged.status === 'paid' && data.status === undefined) data.status = 'sent'
+      }
+      if ((merged.status === 'draft' || merged.status === 'cancelled') && credited > 0 && current.status !== merged.status) {
+        return res.status(400).json({ error: 'This invoice has a credit note. Cancel or delete the credit note first.' })
+      }
+    }
+
+    if (docType !== 'credit_note' && (data.clientName !== undefined || !current.customerId)) {
       data.customerId = await findOrCreateCustomer(req.user._id, merged)
     }
 
-    if (data.items !== undefined) await rememberItems(req.user._id, data.items)
+    if (data.items !== undefined && docType !== 'credit_note') await rememberItems(req.user._id, data.items)
 
     const invoice = await Invoice.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
       data,
       { new: true }
     ).lean()
-    res.json({ success: true, invoice: decorate(invoice, paid) })
+    if (docType === 'credit_note') await syncRefInvoice(req.user._id, current.refInvoiceId)
+    res.json({ success: true, invoice: await decorateOne(req.user._id, invoice) })
   } catch (err) {
     console.error(err)
     if (err && err.code === 11000) {
-      return res.status(409).json({ error: 'duplicate_number', message: 'This invoice number is already used.' })
+      return res.status(409).json({ error: 'duplicate_number', message: 'This number is already used.' })
     }
     res.status(500).json({ error: 'Server error' })
   }
@@ -359,14 +457,33 @@ router.put('/:id', auth, async (req, res) => {
 // Invoice delete karo — uske payment records bhi saath mein hat jate hain
 router.delete('/:id', auth, async (req, res) => {
   try {
-    const invoice = await Invoice.findOneAndDelete({
-      _id: req.params.id,
-      userId: req.user._id
-    })
-    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
-    await Payment.deleteMany({ userId: req.user._id, invoiceId: invoice._id })
+    const current = await findOwned(req.user._id, req.params.id)
+    if (!current) return res.status(404).json({ error: 'Invoice not found' })
+    const docType = docTypeOf(current)
+
+    if (docType === 'invoice') {
+      const notes = await Invoice.find({ userId: req.user._id, refInvoiceId: current._id }).lean()
+      if (notes.length) {
+        return res.status(400).json({ error: 'This invoice has a credit note. Delete the credit note first.' })
+      }
+    }
+
+    await Invoice.findOneAndDelete({ _id: current._id, userId: req.user._id })
+
+    if (docType === 'invoice') {
+      await Payment.deleteMany({ userId: req.user._id, invoiceId: current._id })
+      // The quotation this invoice came from can be converted again
+      if (current.fromQuotationId) {
+        const q = await findOwned(req.user._id, current.fromQuotationId)
+        if (q && sameId(q.convertedInvoiceId, current._id)) {
+          await Invoice.findByIdAndUpdate(q._id, { status: 'accepted', convertedInvoiceId: null, convertedInvoiceNo: '' })
+        }
+      }
+    }
+    if (docType === 'credit_note') await syncRefInvoice(req.user._id, current.refInvoiceId)
     res.json({ success: true })
   } catch (err) {
+    console.error(err)
     res.status(500).json({ error: 'Server error' })
   }
 })

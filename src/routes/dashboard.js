@@ -5,7 +5,7 @@ const Payment = require('../models/Payment')
 const Customer = require('../models/Customer')
 const User = require('../models/User')
 const Item = require('../models/Item')
-const { invoiceTotal, r2 } = require('../utils/invoiceCalc')
+const { buildLedger } = require('../utils/ledger')
 
 const router = express.Router()
 
@@ -22,28 +22,22 @@ router.get('/stats', auth, async (req, res) => {
       Customer.countDocuments({ userId })
     ])
 
-    const billable = invoices.filter(inv => inv.status !== 'cancelled' && inv.status !== 'draft')
-    const billableIds = new Set(billable.map(inv => String(inv._id)))
-    const totalInvoiced = billable.reduce((s, inv) => s + invoiceTotal(inv), 0)
-
-    const received = payments
-      .filter(p => billableIds.has(String(p.invoiceId)))
-      .reduce((s, p) => s + (Number(p.amount) || 0), 0)
-    const pending = Math.max(0, totalInvoiced - received)
+    const ledger = buildLedger(invoices, payments)
+    const onlyInvoices = ledger.invoices
 
     // Client count: saved clients, ya (purane data ke liye) invoices ke alag-alag client naam — jo zyada ho
     const namesOnInvoices = new Set(
-      invoices.map(inv => String(inv.clientName || '').trim().toLowerCase()).filter(Boolean)
+      onlyInvoices.map(inv => String(inv.clientName || '').trim().toLowerCase()).filter(Boolean)
     )
 
     res.json({
       success: true,
       stats: {
-        totalInvoiced: r2(totalInvoiced),
-        received: r2(received),
-        pending: r2(pending),
-        invoiceCount: invoices.length,
-        draftCount: invoices.filter(inv => inv.status === 'draft').length,
+        ...ledger.totals,
+        invoiceCount: onlyInvoices.length,
+        draftCount: onlyInvoices.filter(inv => inv.status === 'draft').length,
+        quotationCount: ledger.quotations.length,
+        creditNoteCount: ledger.creditNotes.length,
         customerCount: Math.max(customerCount, namesOnInvoices.size)
       }
     })
@@ -99,36 +93,13 @@ router.get('/bootstrap', auth, async (req, res) => {
       }
     }
 
-    const paidByInvoice = {}
-    for (const p of payments) {
-      const k = String(p.invoiceId)
-      paidByInvoice[k] = (paidByInvoice[k] || 0) + (Number(p.amount) || 0)
-    }
-
-    const agg = {}
-    let totalInvoiced = 0, received = 0
-    const outInvoices = invoices.map(inv => {
-      const total = invoiceTotal(inv)
-      const paid = r2(paidByInvoice[String(inv._id)] || 0)
-      if (inv.status !== 'cancelled' && inv.status !== 'draft') {
-        totalInvoiced += total
-        received += paid
-        if (inv.customerId) {
-          const k = String(inv.customerId)
-          if (!agg[k]) agg[k] = { invoiceCount: 0, billed: 0, received: 0 }
-          agg[k].invoiceCount += 1
-          agg[k].billed += total
-          agg[k].received += paid
-        }
-      }
-      // Logo yahan nahi bhejte — frontend use business profile se jod leta hai
-      const { bizLogo, ...rest } = inv
-      return { ...rest, grandTotal: total, paidAmount: paid, balance: r2(Math.max(0, total - paid)) }
-    })
-
+    const ledger = buildLedger(invoices, payments)
+    // The logo is not sent with each document — the app adds it from the business profile
+    const strip = ({ bizLogo, ...rest }) => rest
+    const outInvoices = ledger.invoices.map(strip)
     const outCustomers = customers.map(c => {
-      const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0 }
-      return { ...c, invoiceCount: a.invoiceCount, billed: r2(a.billed), received: r2(a.received), outstanding: r2(Math.max(0, a.billed - a.received)) }
+      const a = ledger.byCustomer[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0 }
+      return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding }
     })
 
     const isPro = Boolean(user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date())
@@ -138,15 +109,17 @@ router.get('/bootstrap', auth, async (req, res) => {
       success: true,
       businesses: user.businesses || [],
       invoices: outInvoices,
+      quotations: ledger.quotations.map(strip),
+      creditNotes: ledger.creditNotes.map(strip),
       customers: outCustomers,
       payments,
       items,
       stats: {
-        totalInvoiced: r2(totalInvoiced),
-        received: r2(received),
-        pending: r2(Math.max(0, totalInvoiced - received)),
-        invoiceCount: invoices.length,
-        draftCount: invoices.filter(inv => inv.status === 'draft').length,
+        ...ledger.totals,
+        invoiceCount: outInvoices.length,
+        draftCount: outInvoices.filter(inv => inv.status === 'draft').length,
+        quotationCount: ledger.quotations.length,
+        creditNoteCount: ledger.creditNotes.length,
         customerCount: customers.length,
       },
       status: {
