@@ -12,7 +12,7 @@ const known = new Map() // userId -> expiry timestamp
 module.exports = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1]
-    if (!token) return res.status(401).json({ error: 'Token nahi mila' })
+    if (!token) return res.status(401).json({ error: 'Please log in again' })
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     const id = String(decoded.id || '')
@@ -20,7 +20,7 @@ module.exports = async (req, res, next) => {
 
     if (!(known.get(id) > Date.now())) {
       const exists = await User.findById(id).select('_id').lean()
-      if (!exists) return res.status(401).json({ error: 'User nahi mila' })
+      if (!exists) return res.status(401).json({ error: 'Account not found' })
       if (known.size > 5000) known.clear()
       known.set(id, Date.now() + KNOWN_TTL_MS)
     }

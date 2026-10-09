@@ -135,7 +135,7 @@ router.post('/create-order', auth, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Order create karne mein error' })
+    res.status(500).json({ error: 'Could not create the order. Please try again.' })
   }
 })
 
@@ -165,7 +165,7 @@ router.post('/verify', auth, async (req, res) => {
       }
       if (notes.planId && PLANS[notes.planId]) paidPlanId = notes.planId
     } catch (e) {
-      console.warn('Order fetch nahi ho paya, request ka planId use kar rahe hain:', e.message)
+      console.warn('Could not fetch order, using planId from request:', e.message)
     }
 
     const plan = PLANS[paidPlanId] || PLANS.monthly
@@ -182,13 +182,13 @@ router.post('/verify', auth, async (req, res) => {
 
     res.json({
       success: true,
-      message: `🎉 Pro access activated! Valid for ${plan.days} days.`,
+      message: `Pro is active for ${plan.days} days.`,
       planId: plan.id,
       proExpiry
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Payment verify karne mein error' })
+    res.status(500).json({ error: 'Could not verify the payment. Please contact support.' })
   }
 })
 
@@ -203,7 +203,7 @@ router.post('/create-subscription', auth, async (req, res) => {
     const plan = PLANS[planId]
 
     if (!plan) return res.status(400).json({ error: 'Invalid plan' })
-    if (!plan.razorpayPlanId) return res.status(400).json({ error: 'Auto Pay is plan ke liye available nahi — env variable missing hai' })
+    if (!plan.razorpayPlanId) return res.status(400).json({ error: 'Auto Pay is not available for this plan yet' })
 
     // Agar user ki pehle se koi active subscription hai, cancel karo
     const user = await User.findById(req.user._id)
@@ -211,7 +211,7 @@ router.post('/create-subscription', auth, async (req, res) => {
       try {
         await razorpay.subscriptions.cancel(user.subscriptionId)
       } catch (e) {
-        console.warn('Old subscription cancel nahi hui:', e.message)
+        console.warn('Could not cancel old subscription:', e.message)
       }
     }
 
@@ -240,7 +240,7 @@ router.post('/create-subscription', auth, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Subscription create karne mein error' })
+    res.status(500).json({ error: 'Could not start the subscription. Please try again.' })
   }
 })
 
@@ -279,13 +279,13 @@ router.post('/verify-subscription', auth, async (req, res) => {
 
     res.json({
       success: true,
-      message: `🎉 Auto Pay active! Har ${plan.days} din pe automatically renew hoga.`,
+      message: `Auto Pay is active. Your plan renews automatically every ${plan.days} days.`,
       planId: user.lastPlanId,
       proExpiry
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Subscription verify karne mein error' })
+    res.status(500).json({ error: 'Could not verify the subscription. Please contact support.' })
   }
 })
 
@@ -295,7 +295,7 @@ router.post('/cancel-subscription', auth, async (req, res) => {
     const user = await User.findById(req.user._id)
 
     if (!user.subscriptionId) {
-      return res.status(400).json({ error: 'Koi active subscription nahi mili' })
+      return res.status(400).json({ error: 'No active subscription found' })
     }
 
     await razorpay.subscriptions.cancel(user.subscriptionId, { cancel_at_cycle_end: 1 })
@@ -306,11 +306,11 @@ router.post('/cancel-subscription', auth, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Auto Pay cancel ho jayega ${user.proExpiry?.toDateString() || 'cycle end'} ke baad. Tab tak Pro access rahega.`
+      message: `Auto Pay will stop after ${user.proExpiry?.toDateString() || 'the current cycle'}. You keep Pro access until then.`
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Subscription cancel karne mein error' })
+    res.status(500).json({ error: 'Could not cancel the subscription. Please try again.' })
   }
 })
 
@@ -331,7 +331,7 @@ router.get('/subscription-status', auth, async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Status fetch karne mein error' })
+    res.status(500).json({ error: 'Could not load the subscription status.' })
   }
 })
 

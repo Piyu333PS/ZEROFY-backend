@@ -9,7 +9,7 @@ const router = express.Router()
 router.get('/me', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
-    if (!user) return res.status(404).json({ error: 'User nahi mila' })
+    if (!user) return res.status(404).json({ error: 'Account not found' })
     const isPro = user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date()
     res.json({
       email: user.email,
@@ -30,26 +30,26 @@ router.get('/me', auth, async (req, res) => {
 router.post('/change-email', auth, async (req, res) => {
   try {
     const { newEmail, password } = req.body
-    if (!newEmail || !password) return res.status(400).json({ error: 'Email aur password dono chahiye' })
+    if (!newEmail || !password) return res.status(400).json({ error: 'Email and password are both required' })
 
     const user = await User.findById(req.user._id)
-    if (!user) return res.status(404).json({ error: 'User nahi mila' })
+    if (!user) return res.status(404).json({ error: 'Account not found' })
 
     // Google se login karne wale users ka password nahi hota
-    if (!user.password) return res.status(400).json({ error: 'Google se login kiya hai, email yahan se change nahi ho sakti' })
+    if (!user.password) return res.status(400).json({ error: 'You log in with Google, so the email cannot be changed here' })
 
     // Password verify karo
     const match = await bcrypt.compare(password, user.password)
-    if (!match) return res.status(400).json({ error: 'Password galat hai' })
+    if (!match) return res.status(400).json({ error: 'Password is incorrect' })
 
     // Check karo naya email already exist toh nahi karta
     const existing = await User.findOne({ email: newEmail.toLowerCase() })
-    if (existing) return res.status(400).json({ error: 'Ye email already use ho rahi hai' })
+    if (existing) return res.status(400).json({ error: 'This email is already in use' })
 
     user.email = newEmail.toLowerCase()
     await user.save()
 
-    res.json({ success: true, message: 'Email update ho gayi!', email: user.email })
+    res.json({ success: true, message: 'Email updated.', email: user.email })
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
   }
@@ -59,22 +59,22 @@ router.post('/change-email', auth, async (req, res) => {
 router.post('/change-password', auth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body
-    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Dono passwords chahiye' })
-    if (newPassword.length < 6) return res.status(400).json({ error: 'Naya password kam se kam 6 characters ka hona chahiye' })
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password are both required' })
+    if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' })
 
     const user = await User.findById(req.user._id)
-    if (!user) return res.status(404).json({ error: 'User nahi mila' })
+    if (!user) return res.status(404).json({ error: 'Account not found' })
 
     // Google users ke liye password nahi hoga
-    if (!user.password) return res.status(400).json({ error: 'Google se login kiya hai, password change nahi ho sakta' })
+    if (!user.password) return res.status(400).json({ error: 'You log in with Google, so there is no password to change' })
 
     const match = await bcrypt.compare(currentPassword, user.password)
-    if (!match) return res.status(400).json({ error: 'Purana password galat hai' })
+    if (!match) return res.status(400).json({ error: 'Current password is incorrect' })
 
     user.password = await bcrypt.hash(newPassword, 10)
     await user.save()
 
-    res.json({ success: true, message: 'Password change ho gaya!' })
+    res.json({ success: true, message: 'Password changed.' })
   } catch (err) {
     res.status(500).json({ error: 'Server error' })
   }

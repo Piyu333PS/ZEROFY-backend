@@ -121,7 +121,7 @@ router.get('/', auth, async (req, res) => {
 // Bulk import ke liye Excel template download karo (sample row ke saath)
 router.get('/template', auth, async (req, res) => {
   try {
-    const headers = ['Naam', 'Phone', 'Email', 'GSTIN', 'Address']
+    const headers = ['Name', 'Phone', 'Email', 'GSTIN', 'Address']
     const sample = ['Ravi Upadhayay', '9828552452', 'ravi23@gmail.com', '08EGXPS9616D1ZK', 'Jaipur, Rajasthan']
 
     const ws = XLSX.utils.aoa_to_sheet([headers, sample])
@@ -136,7 +136,7 @@ router.get('/template', auth, async (req, res) => {
     res.send(buffer)
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Template banane mein error aaya' })
+    res.status(500).json({ error: 'Could not create the template' })
   }
 })
 
@@ -144,7 +144,7 @@ router.get('/template', auth, async (req, res) => {
 // Uploaded Excel/CSV se ek saath bahut saare customers create karo
 router.post('/import', auth, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'File nahi mili' })
+    if (!req.file) return res.status(400).json({ error: 'No file was uploaded' })
 
     let rows
     try {
@@ -152,11 +152,11 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
       const sheet = wb.Sheets[wb.SheetNames[0]]
       rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
     } catch {
-      return res.status(400).json({ error: 'File padhi nahi ja saki. Sahi .xlsx ya .csv file upload karein' })
+      return res.status(400).json({ error: 'Could not read the file. Upload a valid .xlsx or .csv file.' })
     }
 
-    if (!rows.length) return res.status(400).json({ error: 'File mein koi data nahi mila' })
-    if (rows.length > 2000) return res.status(400).json({ error: 'Ek baar mein max 2000 rows import ho sakti hain' })
+    if (!rows.length) return res.status(400).json({ error: 'The file has no data' })
+    if (rows.length > 2000) return res.status(400).json({ error: 'You can import up to 2000 rows at a time' })
 
     const nameKeys = ['naam', 'name', 'customer name']
     const phoneKeys = ['phone', 'mobile', 'contact', 'phone number']
@@ -170,7 +170,7 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
     rows.forEach((row, i) => {
       const name = pick(row, nameKeys)
       if (!name) {
-        errors.push({ row: i + 2, reason: 'Naam missing hai' }) // +2 = header row + 1-index
+        errors.push({ row: i + 2, reason: 'Name is missing' }) // +2 = header row + 1-index
         return
       }
       toInsert.push({
@@ -199,7 +199,7 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Import karte waqt error aaya' })
+    res.status(500).json({ error: 'Could not import the file' })
   }
 })
 
@@ -208,7 +208,7 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const customer = await Customer.findOne({ _id: req.params.id, userId: req.user._id }).lean()
-    if (!customer) return res.status(404).json({ error: 'Customer nahi mila' })
+    if (!customer) return res.status(404).json({ error: 'Client not found' })
 
     const invoices = await Invoice.find({ userId: req.user._id, customerId: customer._id })
       .sort({ createdAt: -1 })
@@ -226,7 +226,7 @@ router.get('/:id', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const data = cleanCustomer(req.body)
-    if (!data.name) return res.status(400).json({ error: 'Client ka naam zaroori hai' })
+    if (!data.name) return res.status(400).json({ error: 'Client name is required' })
 
     const customer = new Customer({ ...data, userId: req.user._id })
     await customer.save()
@@ -242,14 +242,14 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const data = cleanCustomer(req.body)
-    if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Client ka naam zaroori hai' })
+    if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Client name is required' })
 
     const customer = await Customer.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
       data,
       { new: true }
     )
-    if (!customer) return res.status(404).json({ error: 'Customer nahi mila' })
+    if (!customer) return res.status(404).json({ error: 'Client not found' })
     res.json({ success: true, customer })
   } catch (err) {
     console.error(err)
@@ -262,7 +262,7 @@ router.put('/:id', auth, async (req, res) => {
 router.delete('/:id', auth, async (req, res) => {
   try {
     const customer = await Customer.findOneAndDelete({ _id: req.params.id, userId: req.user._id })
-    if (!customer) return res.status(404).json({ error: 'Customer nahi mila' })
+    if (!customer) return res.status(404).json({ error: 'Client not found' })
 
     await Invoice.updateMany(
       { userId: req.user._id, customerId: customer._id },

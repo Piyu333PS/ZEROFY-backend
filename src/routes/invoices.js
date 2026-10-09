@@ -157,7 +157,7 @@ router.post('/generate', auth, async (req, res) => {
     if (!isPro && (user.invoiceCount || 0) >= FREE_LIMIT) {
       return res.status(403).json({
         error: 'free_limit_reached',
-        message: `Free plan mein sirf ${FREE_LIMIT} invoices generate ho sakte hain. Pro upgrade karo!`,
+        message: `The free plan includes ${FREE_LIMIT} invoices. Upgrade to Pro for unlimited invoices.`,
         invoiceCount: user.invoiceCount,
         freeLimit: FREE_LIMIT
       })
@@ -195,7 +195,7 @@ router.get('/businesses', auth, async (req, res) => {
 router.put('/businesses', auth, async (req, res) => {
   try {
     if (!Array.isArray(req.body.businesses)) {
-      return res.status(400).json({ error: 'businesses array bhejna zaroori hai' })
+      return res.status(400).json({ error: 'A businesses list is required' })
     }
     const BIZ_FIELDS = ['id', 'name', 'email', 'phone', 'altPhone', 'altEmail', 'gst', 'addr', 'prefix',
       'logo', 'bankDetails', 'upiId', 'terms', 'signatory']
@@ -237,14 +237,14 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const data = cleanInvoiceBody(req.body)
-    if (!data.no) return res.status(400).json({ error: 'Invoice number zaroori hai' })
-    if (!String(data.clientName || '').trim()) return res.status(400).json({ error: 'Client ka naam zaroori hai' })
+    if (!data.no) return res.status(400).json({ error: 'Invoice number is required' })
+    if (!String(data.clientName || '').trim()) return res.status(400).json({ error: 'Client name is required' })
 
     const existing = await Invoice.findOne({ userId: req.user._id, bizId: data.bizId || null, no: data.no })
     if (existing) {
       return res.status(409).json({
         error: 'duplicate_number',
-        message: `Invoice number ${data.no} is business mein pehle se use ho chuka hai. Koi aur number daalein.`
+        message: `Invoice number ${data.no} is already used for this business. Enter a different number.`
       })
     }
 
@@ -255,7 +255,7 @@ router.post('/', auth, async (req, res) => {
       if (!isPro && (user.invoiceCount || 0) >= FREE_LIMIT) {
         return res.status(403).json({
           error: 'free_limit_reached',
-          message: `Free plan mein sirf ${FREE_LIMIT} invoices generate ho sakte hain. Pro upgrade karo!`,
+          message: `The free plan includes ${FREE_LIMIT} invoices. Upgrade to Pro for unlimited invoices.`,
           invoiceCount: user.invoiceCount,
           freeLimit: FREE_LIMIT
         })
@@ -281,7 +281,7 @@ router.post('/', auth, async (req, res) => {
   } catch (err) {
     console.error(err)
     if (err && err.code === 11000) {
-      return res.status(409).json({ error: 'duplicate_number', message: 'Ye invoice number pehle se use ho chuka hai.' })
+      return res.status(409).json({ error: 'duplicate_number', message: 'This invoice number is already used.' })
     }
     res.status(500).json({ error: 'Server error' })
   }
@@ -291,11 +291,11 @@ router.post('/', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, userId: req.user._id }).lean()
-    if (!invoice) return res.status(404).json({ error: 'Invoice nahi mili' })
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
     const paid = await paidMap(req.user._id, invoice._id)
     res.json({ success: true, invoice: decorate(invoice, paid) })
   } catch (err) {
-    res.status(404).json({ error: 'Invoice nahi mili' })
+    res.status(404).json({ error: 'Invoice not found' })
   }
 })
 
@@ -304,10 +304,10 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const current = await Invoice.findOne({ _id: req.params.id, userId: req.user._id }).lean()
-    if (!current) return res.status(404).json({ error: 'Invoice nahi mili' })
+    if (!current) return res.status(404).json({ error: 'Invoice not found' })
 
     const data = cleanInvoiceBody(req.body)
-    if (data.no !== undefined && !data.no) return res.status(400).json({ error: 'Invoice number zaroori hai' })
+    if (data.no !== undefined && !data.no) return res.status(400).json({ error: 'Invoice number is required' })
 
     // Number ya business badla ho to duplicate check
     const nextNo = data.no !== undefined ? data.no : current.no
@@ -317,7 +317,7 @@ router.put('/:id', auth, async (req, res) => {
       if (clash && String(clash._id) !== String(current._id)) {
         return res.status(409).json({
           error: 'duplicate_number',
-          message: `Invoice number ${nextNo} is business mein pehle se use ho chuka hai. Koi aur number daalein.`
+          message: `Invoice number ${nextNo} is already used for this business. Enter a different number.`
         })
       }
     }
@@ -349,7 +349,7 @@ router.put('/:id', auth, async (req, res) => {
   } catch (err) {
     console.error(err)
     if (err && err.code === 11000) {
-      return res.status(409).json({ error: 'duplicate_number', message: 'Ye invoice number pehle se use ho chuka hai.' })
+      return res.status(409).json({ error: 'duplicate_number', message: 'This invoice number is already used.' })
     }
     res.status(500).json({ error: 'Server error' })
   }
@@ -363,7 +363,7 @@ router.delete('/:id', auth, async (req, res) => {
       _id: req.params.id,
       userId: req.user._id
     })
-    if (!invoice) return res.status(404).json({ error: 'Invoice nahi mili' })
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
     await Payment.deleteMany({ userId: req.user._id, invoiceId: invoice._id })
     res.json({ success: true })
   } catch (err) {

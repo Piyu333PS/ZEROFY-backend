@@ -44,26 +44,26 @@ router.post('/', auth, async (req, res) => {
     const { invoiceId, date, method, notes } = req.body
     const amount = r2(req.body.amount)
     if (!invoiceId || !date) {
-      return res.status(400).json({ error: 'Invoice aur date zaroori hain' })
+      return res.status(400).json({ error: 'Invoice and date are required' })
     }
-    if (!(amount > 0)) return res.status(400).json({ error: 'Amount 0 se zyada hona chahiye' })
-    if (!DATE_RE.test(String(date))) return res.status(400).json({ error: 'Date sahi format mein nahi hai' })
+    if (!(amount > 0)) return res.status(400).json({ error: 'Amount must be more than 0' })
+    if (!DATE_RE.test(String(date))) return res.status(400).json({ error: 'Date is not valid' })
 
     let invoice
     try {
       invoice = await Invoice.findOne({ _id: invoiceId, userId: req.user._id })
     } catch { invoice = null }
-    if (!invoice) return res.status(404).json({ error: 'Invoice nahi mili' })
-    if (invoice.status === 'draft') return res.status(400).json({ error: 'Draft invoice par payment record nahi ho sakta — pehle invoice finalize karein' })
-    if (invoice.status === 'cancelled') return res.status(400).json({ error: 'Cancelled invoice par payment record nahi ho sakta' })
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' })
+    if (invoice.status === 'draft') return res.status(400).json({ error: 'Payments cannot be recorded on a draft. Finalise the invoice first.' })
+    if (invoice.status === 'cancelled') return res.status(400).json({ error: 'Payments cannot be recorded on a cancelled invoice' })
 
     const total = invoiceTotal(invoice)
     const earlier = await Payment.find({ invoiceId: invoice._id }).lean()
     const alreadyPaid = earlier.reduce((s, p) => s + (Number(p.amount) || 0), 0)
     const balance = r2(total - alreadyPaid)
-    if (balance <= 0) return res.status(400).json({ error: 'Ye invoice pehle se poora paid hai' })
+    if (balance <= 0) return res.status(400).json({ error: 'This invoice is already fully paid' })
     if (amount > balance + 0.01) {
-      return res.status(400).json({ error: `Amount balance se zyada hai. Is invoice ka balance ${balance.toFixed(2)} hai.` })
+      return res.status(400).json({ error: `Amount is more than the balance. The balance on this invoice is ${balance.toFixed(2)}.` })
     }
 
     const payment = new Payment({
@@ -92,7 +92,7 @@ router.post('/', auth, async (req, res) => {
 router.delete('/:id', auth, async (req, res) => {
   try {
     const payment = await Payment.findOneAndDelete({ _id: req.params.id, userId: req.user._id })
-    if (!payment) return res.status(404).json({ error: 'Payment nahi mila' })
+    if (!payment) return res.status(404).json({ error: 'Payment not found' })
 
     const invoice = await Invoice.findById(payment.invoiceId)
     if (invoice) await syncInvoiceStatus(invoice)

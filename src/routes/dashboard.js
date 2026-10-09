@@ -69,7 +69,7 @@ router.get('/bootstrap', auth, async (req, res) => {
       Customer.find({ userId }).sort({ name: 1 }).lean(),
       Item.find({ userId }).sort({ name: 1 }).lean(),
     ])
-    if (!user) return res.status(401).json({ error: 'User nahi mila' })
+    if (!user) return res.status(401).json({ error: 'Account not found' })
 
     // Purane invoices jinke client abhi Clients list mein nahi hain — unhe yahin jod do
     const orphans = invoices.filter(inv => !inv.customerId && String(inv.clientName || '').trim())

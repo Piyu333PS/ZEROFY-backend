@@ -20,11 +20,11 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const data = cleanItem(req.body)
-    if (!data.name) return res.status(400).json({ error: 'Item ka naam zaroori hai' })
+    if (!data.name) return res.status(400).json({ error: 'Item name is required' })
 
     const all = await Item.find({ userId: req.user._id }).lean()
     if (all.some(i => String(i.name).trim().toLowerCase() === data.name.toLowerCase())) {
-      return res.status(409).json({ error: 'Is naam ka item pehle se saved hai' })
+      return res.status(409).json({ error: 'An item with this name is already saved' })
     }
     const item = new Item({ ...data, userId: req.user._id })
     await item.save()
@@ -39,9 +39,9 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const data = cleanItem(req.body)
-    if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Item ka naam zaroori hai' })
+    if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Item name is required' })
     const item = await Item.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, data, { new: true })
-    if (!item) return res.status(404).json({ error: 'Item nahi mila' })
+    if (!item) return res.status(404).json({ error: 'Item not found' })
     res.json({ success: true, item })
   } catch (err) {
     console.error(err)
@@ -54,7 +54,7 @@ router.put('/:id', auth, async (req, res) => {
 router.delete('/:id', auth, async (req, res) => {
   try {
     const item = await Item.findOneAndDelete({ _id: req.params.id, userId: req.user._id })
-    if (!item) return res.status(404).json({ error: 'Item nahi mila' })
+    if (!item) return res.status(404).json({ error: 'Item not found' })
     res.json({ success: true })
   } catch (err) {
     console.error(err)

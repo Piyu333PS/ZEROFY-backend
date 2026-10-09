@@ -12,7 +12,7 @@ router.post('/generate', auth, async (req, res) => {
 
     // Check limit
     if (!user.isPro && user.resumeCount >= user.freeLimit) {
-      return res.status(403).json({ error: 'Free limit khatam', paywall: true })
+      return res.status(403).json({ error: 'You have used your free limit', paywall: true })
     }
 
     const { formData, experiences, educations, techSkills, softSkills, languages, certifications } = req.body
@@ -70,7 +70,7 @@ Please create a professional resume summary (3-4 lines), and improve the work ex
     })
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Resume generate karne mein error aaya' })
+    res.status(500).json({ error: 'Could not generate the resume. Please try again.' })
   }
 })
 

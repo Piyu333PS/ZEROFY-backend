@@ -52,7 +52,7 @@ app.use(async (req, res, next) => {
     await connectDB()
     next()
   } catch (err) {
-    res.status(503).json({ error: 'Database abhi available nahi hai, thodi der mein try karo' })
+    res.status(503).json({ error: 'The service is temporarily unavailable. Please try again in a moment.' })
   }
 })
 
