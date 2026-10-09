@@ -25,7 +25,8 @@ app.use(cors({
   ],
   credentials: true
 }))
-app.use(express.json())
+// 1mb: business profile mein chhota logo (base64) aa sakta hai — default 100kb usme kam padta hai
+app.use(express.json({ limit: '1mb' }))
 
 // MongoDB connect
 let dbPromise = null

@@ -4,6 +4,8 @@ const XLSX = require('xlsx')
 const auth = require('../middleware/auth')
 const Customer = require('../models/Customer')
 const Invoice = require('../models/Invoice')
+const Payment = require('../models/Payment')
+const { invoiceTotal, r2 } = require('../utils/invoiceCalc')
 
 const router = express.Router()
 
@@ -24,15 +26,91 @@ const pick = (row, keys) => {
   return ''
 }
 
+// Client se sirf yehi fields accept honge
+const CUSTOMER_FIELDS = ['name', 'email', 'phone', 'gst', 'addr', 'notes', 'bizId']
+const cleanCustomer = (body = {}) => {
+  const out = {}
+  for (const k of CUSTOMER_FIELDS) {
+    if (body[k] !== undefined && body[k] !== null) out[k] = typeof body[k] === 'string' ? body[k].trim() : body[k]
+  }
+  if (out.gst) out.gst = String(out.gst).toUpperCase()
+  return out
+}
+
+// Purane invoices (jo Clients feature se pehle bane the) ke clients ko Clients list mein le aao.
+// Jin invoices ka customerId null hai, unke naam se client dhundo ya banao, aur invoice link kar do.
+async function backfillCustomersFromInvoices(userId) {
+  const orphans = await Invoice.find({ userId, customerId: null }).lean()
+  if (!orphans.length) return
+  const customers = await Customer.find({ userId }).lean()
+  const byName = {}
+  for (const c of customers) byName[String(c.name || '').trim().toLowerCase()] = c._id
+
+  for (const inv of orphans) {
+    const name = String(inv.clientName || '').trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (!byName[key]) {
+      const created = new Customer({
+        userId, bizId: inv.bizId || null, name,
+        email: inv.clientEmail || '', phone: inv.clientPhone || '',
+        gst: inv.clientGst || '', addr: inv.clientAddr || ''
+      })
+      await created.save()
+      byName[key] = created._id
+    }
+    await Invoice.findByIdAndUpdate(inv._id, { customerId: byName[key] })
+  }
+}
+
 // ─── GET /api/customers ────────────────────────────────────────
-// Sabhi customers fetch karo (us user ki), optionally bizId se filter
+// Sabhi customers fetch karo (us user ki), optionally bizId se filter.
+// Har customer ke saath: invoiceCount, billed, received, outstanding.
 router.get('/', auth, async (req, res) => {
   try {
+    try {
+      await backfillCustomersFromInvoices(req.user._id)
+    } catch (e) {
+      console.error('Customer backfill error:', e)
+    }
+
     const filter = { userId: req.user._id }
     if (req.query.bizId) filter.bizId = req.query.bizId
 
-    const customers = await Customer.find(filter).sort({ name: 1 }).lean()
-    res.json({ success: true, customers })
+    const [customers, invoices, payments] = await Promise.all([
+      Customer.find(filter).sort({ name: 1 }).lean(),
+      Invoice.find({ userId: req.user._id }).lean(),
+      Payment.find({ userId: req.user._id }).lean(),
+    ])
+
+    const paidByInvoice = {}
+    for (const p of payments) {
+      const k = String(p.invoiceId)
+      paidByInvoice[k] = (paidByInvoice[k] || 0) + (Number(p.amount) || 0)
+    }
+    const agg = {}
+    for (const inv of invoices) {
+      if (!inv.customerId || inv.status === 'cancelled' || inv.status === 'draft') continue
+      const k = String(inv.customerId)
+      if (!agg[k]) agg[k] = { invoiceCount: 0, billed: 0, received: 0 }
+      agg[k].invoiceCount += 1
+      agg[k].billed += invoiceTotal(inv)
+      agg[k].received += paidByInvoice[String(inv._id)] || 0
+    }
+
+    res.json({
+      success: true,
+      customers: customers.map(c => {
+        const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0 }
+        return {
+          ...c,
+          invoiceCount: a.invoiceCount,
+          billed: r2(a.billed),
+          received: r2(a.received),
+          outstanding: r2(Math.max(0, a.billed - a.received)),
+        }
+      })
+    })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -147,14 +225,10 @@ router.get('/:id', auth, async (req, res) => {
 // Naya customer banao
 router.post('/', auth, async (req, res) => {
   try {
-    const { name, email, phone, gst, addr, notes, bizId } = req.body
-    if (!name || !name.trim()) return res.status(400).json({ error: 'Customer ka naam zaroori hai' })
+    const data = cleanCustomer(req.body)
+    if (!data.name) return res.status(400).json({ error: 'Client ka naam zaroori hai' })
 
-    const customer = new Customer({
-      userId: req.user._id,
-      name: name.trim(),
-      email, phone, gst, addr, notes, bizId
-    })
+    const customer = new Customer({ ...data, userId: req.user._id })
     await customer.save()
     res.json({ success: true, customer })
   } catch (err) {
@@ -167,9 +241,12 @@ router.post('/', auth, async (req, res) => {
 // Customer update karo
 router.put('/:id', auth, async (req, res) => {
   try {
+    const data = cleanCustomer(req.body)
+    if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Client ka naam zaroori hai' })
+
     const customer = await Customer.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
-      req.body,
+      data,
       { new: true }
     )
     if (!customer) return res.status(404).json({ error: 'Customer nahi mila' })

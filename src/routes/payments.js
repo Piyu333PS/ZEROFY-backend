@@ -2,15 +2,24 @@ const express = require('express')
 const auth = require('../middleware/auth')
 const Payment = require('../models/Payment')
 const Invoice = require('../models/Invoice')
+const { invoiceTotal, r2 } = require('../utils/invoiceCalc')
 
 const router = express.Router()
 
-// Invoice ka grand total nikaalo (items + tax - discount), Invoice.js jaisa hi logic
-function invoiceTotal(invoice) {
-  const sub = (invoice.items || []).reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0)
-  const afterDisc = sub - (sub * (Number(invoice.discPct) || 0) / 100)
-  const withTax = afterDisc + (afterDisc * (Number(invoice.taxPct) || 0) / 100)
-  return Math.round(withTax * 100) / 100
+const METHODS = ['upi', 'cash', 'bank_transfer', 'card', 'cheque', 'other']
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+// Payments ke hisaab se invoice ka status theek karo
+async function syncInvoiceStatus(invoice) {
+  if (invoice.status === 'cancelled' || invoice.status === 'draft') return invoice.status
+  const all = await Payment.find({ invoiceId: invoice._id }).lean()
+  const totalPaid = all.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+  const total = invoiceTotal(invoice)
+  const newStatus = (totalPaid > 0 && totalPaid >= total - 0.01) ? 'paid' : 'sent'
+  if (newStatus !== invoice.status) {
+    await Invoice.findByIdAndUpdate(invoice._id, { status: newStatus })
+  }
+  return newStatus
 }
 
 // ─── GET /api/payments?invoiceId=... ───────────────────────────
@@ -32,39 +41,46 @@ router.get('/', auth, async (req, res) => {
 // Naya payment record karo — invoice ka status bhi auto-update ho jayega
 router.post('/', auth, async (req, res) => {
   try {
-    const { invoiceId, amount, date, method, notes } = req.body
-    if (!invoiceId || !amount || !date) {
-      return res.status(400).json({ error: 'invoiceId, amount aur date zaroori hain' })
+    const { invoiceId, date, method, notes } = req.body
+    const amount = r2(req.body.amount)
+    if (!invoiceId || !date) {
+      return res.status(400).json({ error: 'Invoice aur date zaroori hain' })
     }
+    if (!(amount > 0)) return res.status(400).json({ error: 'Amount 0 se zyada hona chahiye' })
+    if (!DATE_RE.test(String(date))) return res.status(400).json({ error: 'Date sahi format mein nahi hai' })
 
-    const invoice = await Invoice.findOne({ _id: invoiceId, userId: req.user._id })
+    let invoice
+    try {
+      invoice = await Invoice.findOne({ _id: invoiceId, userId: req.user._id })
+    } catch { invoice = null }
     if (!invoice) return res.status(404).json({ error: 'Invoice nahi mili' })
+    if (invoice.status === 'draft') return res.status(400).json({ error: 'Draft invoice par payment record nahi ho sakta — pehle invoice finalize karein' })
+    if (invoice.status === 'cancelled') return res.status(400).json({ error: 'Cancelled invoice par payment record nahi ho sakta' })
+
+    const total = invoiceTotal(invoice)
+    const earlier = await Payment.find({ invoiceId: invoice._id }).lean()
+    const alreadyPaid = earlier.reduce((s, p) => s + (Number(p.amount) || 0), 0)
+    const balance = r2(total - alreadyPaid)
+    if (balance <= 0) return res.status(400).json({ error: 'Ye invoice pehle se poora paid hai' })
+    if (amount > balance + 0.01) {
+      return res.status(400).json({ error: `Amount balance se zyada hai. Is invoice ka balance ${balance.toFixed(2)} hai.` })
+    }
 
     const payment = new Payment({
       userId: req.user._id,
-      invoiceId,
+      invoiceId: invoice._id,
       customerId: invoice.customerId || null,
-      amount: Number(amount),
+      amount,
       date,
-      method: method || 'upi',
-      notes
+      method: METHODS.includes(method) ? method : 'upi',
+      notes: String(notes || '').slice(0, 500)
     })
     await payment.save()
 
-    // Ab dekho kitna total pay ho chuka hai is invoice ke liye
-    const allPayments = await Payment.find({ invoiceId })
-    const totalPaid = allPayments.reduce((s, p) => s + p.amount, 0)
-    const total = invoiceTotal(invoice)
+    const invoiceStatus = await syncInvoiceStatus(invoice)
+    const totalPaid = r2(alreadyPaid + amount)
 
-    let newStatus = invoice.status
-    if (totalPaid >= total) newStatus = 'paid'
-    else if (totalPaid > 0) newStatus = 'sent'  // partial payment — 'sent' hi rehne do, front-end alag se "partially paid" dikha sakta hai totalPaid/total compare karke
-
-    if (newStatus !== invoice.status) {
-      await Invoice.findByIdAndUpdate(invoiceId, { status: newStatus })
-    }
-
-    res.json({ success: true, payment, totalPaid, invoiceTotal: total, invoiceStatus: newStatus })
+    res.json({ success: true, payment, totalPaid, invoiceTotal: total, balance: r2(Math.max(0, total - totalPaid)), invoiceStatus })
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
@@ -79,15 +95,7 @@ router.delete('/:id', auth, async (req, res) => {
     if (!payment) return res.status(404).json({ error: 'Payment nahi mila' })
 
     const invoice = await Invoice.findById(payment.invoiceId)
-    if (invoice) {
-      const remaining = await Payment.find({ invoiceId: invoice._id })
-      const totalPaid = remaining.reduce((s, p) => s + p.amount, 0)
-      const total = invoiceTotal(invoice)
-      const newStatus = totalPaid >= total ? 'paid' : (invoice.status === 'paid' ? 'sent' : invoice.status)
-      if (newStatus !== invoice.status) {
-        await Invoice.findByIdAndUpdate(invoice._id, { status: newStatus })
-      }
-    }
+    if (invoice) await syncInvoiceStatus(invoice)
 
     res.json({ success: true })
   } catch (err) {

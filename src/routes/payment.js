@@ -154,14 +154,28 @@ router.post('/verify', auth, async (req, res) => {
       return res.status(400).json({ error: 'Payment verification failed' })
     }
 
-    const plan = PLANS[planId] || PLANS.monthly
+    // Plan hamesha us order se lo jiska payment hua hai — request body ka planId bharose layak nahi
+    // (warna koi monthly ka payment karke yearly plan claim kar sakta tha).
+    let paidPlanId = planId
+    try {
+      const order = await razorpay.orders.fetch(razorpay_order_id)
+      const notes = (order && order.notes) || {}
+      if (notes.userId && notes.userId !== req.user._id.toString()) {
+        return res.status(400).json({ error: 'Payment verification failed' })
+      }
+      if (notes.planId && PLANS[notes.planId]) paidPlanId = notes.planId
+    } catch (e) {
+      console.warn('Order fetch nahi ho paya, request ka planId use kar rahe hain:', e.message)
+    }
+
+    const plan = PLANS[paidPlanId] || PLANS.monthly
     const proExpiry = calcExpiry(plan.days)
 
     await User.findByIdAndUpdate(req.user._id, {
       isPro: true,
       proExpiry,
       freeLimit: 999999,
-      lastPlanId: planId,
+      lastPlanId: plan.id,
       lastPaymentId: razorpay_payment_id,
       invoiceCount: 0
     })
@@ -169,7 +183,7 @@ router.post('/verify', auth, async (req, res) => {
     res.json({
       success: true,
       message: `🎉 Pro access activated! Valid for ${plan.days} days.`,
-      planId,
+      planId: plan.id,
       proExpiry
     })
   } catch (err) {

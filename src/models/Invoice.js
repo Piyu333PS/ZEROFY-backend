@@ -1,20 +1,30 @@
 const mongoose = require('mongoose')
 
 const invoiceItemSchema = new mongoose.Schema({
+  id: { type: String, default: '' },
+  type: { type: String, default: 'goods' },      // 'goods' | 'service'
   desc: { type: String, default: '' },
+  hsnSac: { type: String, default: '' },
+  uqc: { type: String, default: 'PCS' },
   qty: { type: Number, default: 1 },
   rate: { type: Number, default: 0 },
-  hsn: { type: String, default: '' },
-  gst: { type: Number, default: 18 },
+  gstRate: { type: Number },                      // per-item GST % (naye invoices)
+
+  // Purane invoices ke fields — sirf padhne ke liye rakhe hain (backward compatible)
+  hsn: { type: String },
+  gst: { type: Number },
 }, { _id: false })
 
 const invoiceSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
 
   // Invoice details
-  no: { type: String, required: true },
+  no: { type: String, required: true, trim: true },
   date: { type: String },
-  status: { type: String, enum: ['draft', 'sent', 'paid', 'cancelled'], default: 'draft' },
+  dueDate: { type: String, default: '' },
+  poNumber: { type: String, default: '' },
+  // 'overdue' kabhi store nahi hota (due date se nikalta hai) — enum mein sirf purane clients ke liye hai
+  status: { type: String, enum: ['draft', 'sent', 'paid', 'overdue', 'cancelled'], default: 'draft' },
   template: { type: String, default: 'modern' },
   currency: { type: String, default: '₹' },
 
@@ -27,22 +37,31 @@ const invoiceSchema = new mongoose.Schema({
   bizAltEmail: { type: String, default: '' },
   bizGst: { type: String, default: '' },
   bizAddr: { type: String, default: '' },
+  bizLogo: { type: String, default: '' },         // chhota data-URL (frontend compress karke bhejta hai)
 
   // Client info
   // customerId set hoga agar ye invoice ek saved Customer se linked hai.
-  // Purane invoices mein ye null rahega — clientName/etc. flat fields se hi kaam chalega (backward compatible).
   customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null, index: true },
   clientName: { type: String, default: '' },
   clientEmail: { type: String, default: '' },
   clientPhone: { type: String, default: '' },
   clientGst: { type: String, default: '' },
   clientAddr: { type: String, default: '' },
+  placeOfSupply: { type: String, default: '' },   // 2-digit GST state code
 
   // Items & totals
   items: [invoiceItemSchema],
   discPct: { type: Number, default: 0 },
   taxPct: { type: Number, default: 18 },
+  shipping: { type: Number, default: 0 },
+  roundOff: { type: Boolean, default: false },
+  grandTotal: { type: Number, default: 0 },       // server-side calculated, har save par update hota hai
+
   notes: { type: String, default: '' },
+  terms: { type: String, default: '' },
+  bankDetails: { type: String, default: '' },
+  upiId: { type: String, default: '' },
+  signatory: { type: String, default: '' },
 
 }, { timestamps: true })
 

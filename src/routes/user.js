@@ -8,11 +8,12 @@ const router = express.Router()
 // GET /api/user/me — current user info
 router.get('/me', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-password')
+    const user = await User.findById(req.user._id)
     if (!user) return res.status(404).json({ error: 'User nahi mila' })
     const isPro = user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date()
     res.json({
       email: user.email,
+      hasPassword: Boolean(user.password),   // Google-only accounts ke liye false
       isPro,
       proExpiry: user.proExpiry,
       lastPlanId: user.lastPlanId,
@@ -33,6 +34,9 @@ router.post('/change-email', auth, async (req, res) => {
 
     const user = await User.findById(req.user._id)
     if (!user) return res.status(404).json({ error: 'User nahi mila' })
+
+    // Google se login karne wale users ka password nahi hota
+    if (!user.password) return res.status(400).json({ error: 'Google se login kiya hai, email yahan se change nahi ho sakti' })
 
     // Password verify karo
     const match = await bcrypt.compare(password, user.password)
