@@ -15,6 +15,12 @@ const userSchema = new mongoose.Schema({
   subscriptionId: { type: String, default: null },       // 🆕 Razorpay subscription ID
   subscriptionStatus: { type: String, default: null },   // 🆕 created | active | halted | cancelled
   businesses: { type: Array, default: [] },              // saved business profiles
+
+  // Forgot password — 6-digit code ka hash (code khud kabhi store nahi hota)
+  resetCodeHash: { type: String, default: null },
+  resetCodeExpiry: { type: Date, default: null },
+  resetCodeSentAt: { type: Date, default: null },
+  resetCodeAttempts: { type: Number, default: 0 },
 }, { timestamps: true })
 
 module.exports = mongoose.model('User', userSchema)

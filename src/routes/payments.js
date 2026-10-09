@@ -1,5 +1,5 @@
 const express = require('express')
-const auth = require('../middleware/auth')
+const auth = require('../middleware/authLite')
 const Payment = require('../models/Payment')
 const Invoice = require('../models/Invoice')
 const { invoiceTotal, r2 } = require('../utils/invoiceCalc')

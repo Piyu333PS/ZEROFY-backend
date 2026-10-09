@@ -1,10 +1,11 @@
 const express = require('express')
-const auth = require('../middleware/auth')
+const auth = require('../middleware/authLite')
 const User = require('../models/User')
 const Invoice = require('../models/Invoice')
 const Payment = require('../models/Payment')
 const Customer = require('../models/Customer')
 const { calcInvoice, r2 } = require('../utils/invoiceCalc')
+const { rememberItems } = require('../utils/catalog')
 
 const router = express.Router()
 
@@ -41,7 +42,8 @@ function cleanInvoiceBody(body = {}) {
   if (out.taxPct !== undefined) out.taxPct = num(out.taxPct, 18)
   if (out.shipping !== undefined) out.shipping = Math.max(0, num(out.shipping))
   if (out.roundOff !== undefined) out.roundOff = Boolean(out.roundOff)
-  if (typeof out.bizLogo === 'string' && (out.bizLogo.length > MAX_LOGO_CHARS || !out.bizLogo.startsWith('data:image/'))) out.bizLogo = ''
+  // Logo har invoice ke saath store nahi hota (list bhaari ho jati thi) — wo business profile se aata hai
+  if (out.bizLogo !== undefined) out.bizLogo = ''
   if (out.items !== undefined) {
     out.items = (Array.isArray(out.items) ? out.items : []).slice(0, 200).map(it => {
       const item = {}
@@ -263,7 +265,11 @@ router.post('/', auth, async (req, res) => {
 
     const invoice = new Invoice({ ...data, userId: req.user._id })
     invoice.grandTotal = calcInvoice(data).total
-    invoice.customerId = await findOrCreateCustomer(req.user._id, data)
+    const [customerId] = await Promise.all([
+      findOrCreateCustomer(req.user._id, data),
+      rememberItems(req.user._id, data.items),
+    ])
+    invoice.customerId = customerId
     await invoice.save()
 
     // Count tabhi badhao jab invoice sach mein save ho gaya ho
@@ -331,6 +337,8 @@ router.put('/:id', auth, async (req, res) => {
     if (data.clientName !== undefined || !current.customerId) {
       data.customerId = await findOrCreateCustomer(req.user._id, merged)
     }
+
+    if (data.items !== undefined) await rememberItems(req.user._id, data.items)
 
     const invoice = await Invoice.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },
