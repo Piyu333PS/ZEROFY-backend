@@ -93,6 +93,7 @@ router.post('/google', async (req, res) => {
 //   SMTP_HOST  — optional, default smtp.gmail.com
 //   SMTP_PORT  — optional, default 465
 //   MAIL_FROM  — optional, default "Zerofy <SMTP_USER>"
+//   MAIL_REPLY_TO — optional, default support@zerofy.co.in
 const RESET_CODE_TTL_MS = 10 * 60 * 1000
 const RESET_RESEND_GAP_MS = 60 * 1000
 const RESET_MAX_ATTEMPTS = 5
@@ -151,6 +152,8 @@ router.post('/forgot-password', async (req, res) => {
     try {
       await getTransporter().sendMail({
         from: process.env.MAIL_FROM || `Zerofy <${process.env.SMTP_USER}>`,
+        // Replies go to the support address even when the mail is sent from another mailbox
+        replyTo: process.env.MAIL_REPLY_TO || 'support@zerofy.co.in',
         to: user.email,
         subject: `${code} — Zerofy password reset code`,
         text: `Your Zerofy password reset code: ${code}\n\nThis code is valid for 10 minutes. If you did not ask to reset your password, ignore this email. Your account is safe.\n\n— Zerofy`,
