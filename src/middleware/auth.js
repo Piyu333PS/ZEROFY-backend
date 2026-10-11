@@ -11,6 +11,7 @@ module.exports = async (req, res, next) => {
     if (!user) return res.status(401).json({ error: 'Account not found' })
 
     req.user = user
+    req.auth = decoded // { id, via?, gat? } — `via: 'google'` + `gat` (time) mark a session that Google has just verified
     next()
   } catch {
     res.status(401).json({ error: 'Invalid token' })

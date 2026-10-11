@@ -5,6 +5,7 @@ const crypto = require('crypto')
 const nodemailer = require('nodemailer')
 const { OAuth2Client } = require('google-auth-library')
 const User = require('../models/User')
+const Invoice = require('../models/Invoice')
 
 const router = express.Router()
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
@@ -64,6 +65,7 @@ router.post('/google', async (req, res) => {
 
     // User dhundo ya naya banao
     let user = await User.findOne({ $or: [{ googleId }, { email }] })
+    const isNew = !user
 
     if (user) {
       // Pehle se email/password wala user hai, googleId link kar do
@@ -76,8 +78,12 @@ router.post('/google', async (req, res) => {
       user = await User.create({ email, googleId, password: null })
     }
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '30d' })
-    res.json({ token, email: user.email, resumeCount: user.resumeCount, freeLimit: user.freeLimit, isPro: user.isPro })
+    // `via` and `gat` record that Google confirmed who this is, and when. For a short time after that
+    // the person may set a new password without knowing the old one (see /api/user/set-password).
+    const token = jwt.sign({ id: user._id, via: 'google', gat: Date.now() }, process.env.JWT_SECRET, { expiresIn: '30d' })
+    // isNew tells the app this Google account had no Zerofy account before — it shows a note in case
+    // the person expected to see their old data (they may have signed up with a different email).
+    res.json({ token, email: user.email, resumeCount: user.resumeCount, freeLimit: user.freeLimit, isPro: user.isPro, isNew })
   } catch (err) {
     console.error('Google auth error:', err)
     res.status(401).json({ error: 'Google login failed. Please try again.' })
@@ -119,6 +125,73 @@ function getTransporter() {
 
 const GENERIC_SENT = 'If this email is registered with Zerofy, we have sent it a 6-digit code. The code is valid for 10 minutes.'
 
+// ─── Find my account ────────────────────────────────────────────
+// For someone who forgot WHICH email they signed up with. They give the mobile number or GSTIN
+// they used in Zerofy (business profile, an invoice, or checkout) and get the email back partly hidden,
+// e.g. pi•••••h@gmail.com — enough for the owner to recognise it, not enough for anyone else to use.
+const maskEmail = (email) => {
+  const [local, domain] = String(email).split('@')
+  if (!domain) return '•••'
+  const shown = local.length >= 6 ? local.slice(0, 2) + '•'.repeat(Math.min(6, local.length - 3)) + local.slice(-1)
+    : local.slice(0, 1) + '•'.repeat(Math.max(2, local.length - 1))
+  return `${shown}@${domain}`
+}
+
+// A small per-server limit so the lookup cannot be hammered
+const lookupHits = new Map()
+function tooManyLookups(ip) {
+  const now = Date.now(), windowMs = 10 * 60 * 1000
+  const list = (lookupHits.get(ip) || []).filter(t => now - t < windowMs)
+  list.push(now)
+  lookupHits.set(ip, list)
+  if (lookupHits.size > 5000) lookupHits.clear()
+  return list.length > 8
+}
+
+// POST /api/auth/find-account  { phone } or { gstin }
+router.post('/find-account', async (req, res) => {
+  try {
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim()
+    if (tooManyLookups(ip)) return res.status(429).json({ error: 'Too many tries. Please wait 10 minutes and try again.' })
+
+    const raw = String(req.body.phone || req.body.gstin || req.body.value || '').trim()
+    const gstin = raw.toUpperCase().replace(/[^0-9A-Z]/g, '')
+    const digits = raw.replace(/\D/g, '')
+    const isGstin = /^\d{2}[A-Z0-9]{13}$/.test(gstin) && /[A-Z]/.test(gstin)
+    const phone = !isGstin && digits.length >= 10 ? digits.slice(-10) : ''
+    if (!isGstin && !phone) return res.status(400).json({ error: 'Enter a 10-digit mobile number or a 15-character GSTIN' })
+
+    const userIds = new Set()
+    const users = []
+    const add = (u) => { if (u && !userIds.has(String(u._id))) { userIds.add(String(u._id)); users.push(u) } }
+
+    if (isGstin) {
+      for (const u of await User.find({ $or: [{ 'businesses.gst': gstin }, { 'billing.gstin': gstin }] }).lean()) add(u)
+      const inv = await Invoice.findOne({ bizGst: gstin }).lean()
+      if (inv) add(await User.findById(inv.userId).lean())
+    } else {
+      // The number may have been typed with +91, 91 or a leading 0
+      const forms = [phone, `+91${phone}`, `91${phone}`, `0${phone}`]
+      const or = []
+      for (const f of forms) or.push({ 'businesses.phone': f }, { 'businesses.altPhone': f }, { 'billing.phone': f })
+      for (const u of await User.find({ $or: or }).lean()) add(u)
+      const inv = await Invoice.findOne({ $or: forms.map(f => ({ bizPhone: f })) }).lean()
+      if (inv) add(await User.findById(inv.userId).lean())
+    }
+
+    res.json({
+      success: true,
+      accounts: users.slice(0, 3).map(u => ({
+        email: maskEmail(u.email),
+        google: Boolean(u.googleId) || /@(gmail|googlemail)\.com$/i.test(u.email),
+      })),
+    })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
 // POST /api/auth/forgot-password  { email }
 router.post('/forgot-password', async (req, res) => {
   try {
@@ -129,7 +202,7 @@ router.post('/forgot-password', async (req, res) => {
     if (!mailConfigured()) {
       return res.status(503).json({
         error: 'reset_unavailable',
-        message: 'Password reset is not available right now. If your email is a Google account, use "Continue with Google", or contact support.'
+        message: 'We cannot send reset codes by email right now. If your email is a Google account, use "Continue with Google" and then set a new password in Settings. Otherwise write to support@zerofy.co.in.'
       })
     }
 
