@@ -85,12 +85,15 @@ async function completePurchase(purchase, paymentId, extraUserFields = {}) {
   if (!user) return null
   if (purchase.status === 'paid') return { purchase, proExpiry: user.proExpiry, already: true }
 
+  // The page (/verify) and Razorpay's own message (webhook) can both arrive for one payment.
+  // Only the first one to mark it paid goes on; the other finds it already done.
+  const claimed = await Purchase.findOneAndUpdate({ _id: purchase._id, status: 'created' }, { status: 'paid', paymentId: paymentId || '', paidAt: new Date() }, { new: true })
+  if (!claimed) return { purchase: await Purchase.findById(purchase._id), proExpiry: user.proExpiry, already: true }
+
   const plan = PLANS[purchase.planId] || PLANS.monthly
   const proExpiry = extendExpiry(user.isPro ? user.proExpiry : null, plan.days)
   const receiptNo = await receiptNumber()
-  const paid = await Purchase.findByIdAndUpdate(purchase._id, {
-    status: 'paid', paymentId: paymentId || '', receiptNo, paidAt: new Date(),
-  }, { new: true })
+  const paid = await Purchase.findByIdAndUpdate(purchase._id, { receiptNo }, { new: true })
   await User.findByIdAndUpdate(user._id, {
     isPro: true, proExpiry, freeLimit: 999999, lastPlanId: plan.id,
     lastPaymentId: paymentId || '', invoiceCount: 0, ...extraUserFields,
@@ -330,32 +333,47 @@ router.get('/subscription-status', auth, async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
-//  WEBHOOK — Razorpay automatic renewals handle karo
-//  Route: POST /api/payment/webhook
-//  Razorpay Dashboard mein yeh URL add karo:
-//  https://zerofy-backend.vercel.app/api/payment/webhook
+//  WEBHOOK — Razorpay tells the server directly about payments, so nothing depends on the customer's browser.
+//  Razorpay Dashboard → Settings → Webhooks:
+//    URL     https://zerofy-backend.vercel.app/api/payment/webhook
+//    Secret  the same text as RAZORPAY_WEBHOOK_SECRET in the server settings
+//    Events  order.paid, subscription.charged, subscription.activated, subscription.halted, subscription.cancelled
 // ═══════════════════════════════════════════════════════════════
-router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/webhook', async (req, res) => {
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET
-    const signature = req.headers['x-razorpay-signature']
-
-    const expectedSign = crypto
-      .createHmac('sha256', webhookSecret)
-      .update(req.body)
-      .digest('hex')
-
-    if (expectedSign !== signature) {
+    if (!webhookSecret) { console.error('Webhook: RAZORPAY_WEBHOOK_SECRET is not set'); return res.status(500).json({ error: 'Webhook is not set up' }) }
+    // The signature is checked against the body exactly as Razorpay sent it
+    const raw = req.rawBody || (Buffer.isBuffer(req.body) || typeof req.body === 'string' ? req.body : null)
+    if (!raw) return res.status(400).json({ error: 'Empty body' })
+    const expected = Buffer.from(crypto.createHmac('sha256', webhookSecret).update(raw).digest('hex'))
+    const given = Buffer.from(String(req.headers['x-razorpay-signature'] || ''))
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) {
       console.error('Invalid webhook signature')
       return res.status(400).json({ error: 'Invalid signature' })
     }
 
-    const event = JSON.parse(req.body)
-    const payload = event.payload
+    const event = JSON.parse(raw.toString())
+    const payload = event.payload || {}
 
     console.log('Razorpay Webhook:', event.event)
 
     switch (event.event) {
+
+      // A one-time payment went through. If the customer's page never came back to tell us
+      // (phone died, UPI app did not return), this is what switches Pro on.
+      case 'order.paid':
+      case 'payment.captured': {
+        const payment = payload.payment && payload.payment.entity
+        const orderId = (payload.order && payload.order.entity && payload.order.entity.id) || (payment && payment.order_id)
+        if (!orderId || !payment) break
+        const purchase = await Purchase.findOne({ orderId })
+        if (!purchase) break   // not one of our one-time orders (an Auto Pay charge is handled below)
+        if (Number(payment.amount) !== Number(purchase.total)) { console.error('Webhook: amount does not match for order', orderId); break }
+        const done = await completePurchase(purchase, payment.id)
+        console.log(done && done.already ? `Payment already recorded: ${orderId}` : `✅ Payment recorded by webhook: ${orderId}`)
+        break
+      }
 
       case 'subscription.charged': {
         const sub = payload.subscription.entity

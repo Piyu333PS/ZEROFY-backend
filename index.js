@@ -30,7 +30,8 @@ app.use(cors({
   credentials: true
 }))
 // 1mb: business profile mein chhota logo (base64) aa sakta hai — default 100kb usme kam padta hai
-app.use(express.json({ limit: '1mb' }))
+// The untouched body is kept too: the Razorpay webhook needs it to check the signature
+app.use(express.json({ limit: '1mb', verify: (req, res, buf) => { req.rawBody = buf } }))
 
 // MongoDB connect
 let dbPromise = null
