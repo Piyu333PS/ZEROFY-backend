@@ -39,6 +39,10 @@ function sellerInfo() {
 function couponFor(code, base) {
   const key = String(code || '').trim().toUpperCase()
   if (!key) return { code: '', discount: 0 }
+  // A private code for testing a real payment: the price becomes ₹1. It works only while TEST_COUPON is set
+  // in the server settings (at least 8 characters), and stops the moment that setting is removed.
+  const test = String(process.env.TEST_COUPON || '').trim().toUpperCase()
+  if (test.length >= 8 && key === test) return { code: key, discount: Math.max(0, base - 100), desc: 'Test payment' }
   const c = COUPONS[key]
   if (!c) return { code: '', discount: 0, error: 'This coupon code is not valid' }
   let off = c.type === 'percent' ? Math.floor(base * c.discount / 100) : c.discount * 100
