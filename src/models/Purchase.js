@@ -34,6 +34,7 @@ const purchaseSchema = new mongoose.Schema({
   receiptNo: { type: String, default: '' },
   paidAt: { type: Date, default: null },
   commissionPaidAt: { type: Date, default: null },   // when the salesperson's commission for this payment was paid out
+  salesSyncedAt: { type: Date, default: null },      // when this payment was sent to the Sales Dashboard (only payments with a sales code)
 }, { timestamps: true })
 
 module.exports = mongoose.model('Purchase', purchaseSchema)

@@ -17,6 +17,7 @@ const { PLANS, ON_SALE, sellerInfo, quote, financialYear } = require('../utils/p
 const { stateCodeOf } = require('../utils/invoiceCalc')
 const SalesPerson = require('../models/SalesPerson')
 const { cleanCode } = require('../utils/sales')
+const salesHub = require('../utils/salesHub')
 
 const str = (v, max = 200) => String(v == null ? '' : v).trim().slice(0, max)
 const GSTIN_RE = /^\d{2}[A-Z0-9]{13}$/
@@ -94,6 +95,8 @@ async function completePurchase(purchase, paymentId, extraUserFields = {}) {
     isPro: true, proExpiry, freeLimit: 999999, lastPlanId: plan.id,
     lastPaymentId: paymentId || '', invoiceCount: 0, ...extraUserFields,
   })
+  // Tell the Sales Dashboard, so the salesperson's commission shows there. If this fails the daily job sends it again.
+  if (paid && paid.salesCode) await salesHub.pushSale(paid)
   return { purchase: paid, proExpiry }
 }
 
@@ -145,7 +148,10 @@ router.get('/checkout-info', auth, async (req, res) => {
 router.get('/sales-code/:code', auth, async (req, res) => {
   try {
     const code = cleanCode(req.params.code)
-    const person = code ? await SalesPerson.findOne({ code }).lean() : null
+    if (!code) return res.json({ valid: false })
+    // The sales team lives in the Sales Dashboard; the list kept here is only used until that is connected
+    if (salesHub.configured()) return res.json(await salesHub.checkCode(code))
+    const person = await SalesPerson.findOne({ code }).lean()
     if (!person || !person.active) return res.json({ valid: false })
     res.json({ valid: true, code: person.code, name: String(person.name || '').split(/\s+/)[0] })
   } catch (err) { res.status(500).json({ error: 'Server error' }) }

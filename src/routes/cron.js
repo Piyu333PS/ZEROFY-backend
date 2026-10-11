@@ -1,6 +1,7 @@
 const express = require('express')
 const User = require('../models/User')
 const { mailConfigured, sendMail, layout } = require('../utils/mailer')
+const salesHub = require('../utils/salesHub')
 
 // Jobs that run on a timer (see "crons" in vercel.json — once a day).
 // Vercel calls these with "Authorization: Bearer <CRON_SECRET>" when CRON_SECRET is set; anyone else is refused.
@@ -57,6 +58,8 @@ router.get('/daily', async (req, res) => {
   if (!allowed(req)) return res.status(401).json({ error: 'Not allowed' })
   const out = { checked: 0, sent: 0, failed: 0, skipped: mailConfigured() ? '' : 'mail is not set up' }
   try {
+    // Payments with a sales code that did not reach the Sales Dashboard are sent again
+    out.salesSynced = await salesHub.syncPending()
     if (!mailConfigured()) return res.json(out)
     const users = await User.find({ isPro: true }).lean()
     out.checked = users.length
