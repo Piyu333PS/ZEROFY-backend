@@ -15,6 +15,7 @@ const userSchema = new mongoose.Schema({
   subscriptionId: { type: String, default: null },       // 🆕 Razorpay subscription ID
   subscriptionStatus: { type: String, default: null },   // 🆕 created | active | halted | cancelled
   businesses: { type: Array, default: [] },              // saved business profiles
+  expiryReminders: { type: Array, default: [] },         // which "plan ending" mails were already sent, e.g. "2026-11-10:week"
   billing: { type: Object, default: null },              // billing details given at checkout (name, firm, address, GSTIN…)
 
   // Forgot password — 6-digit code ka hash (code khud kabhi store nahi hota)

@@ -15,6 +15,8 @@ const Purchase = require('../models/Purchase')
 const { nextNumber } = require('../models/Counter')
 const { PLANS, ON_SALE, sellerInfo, quote, financialYear } = require('../utils/pricing')
 const { stateCodeOf } = require('../utils/invoiceCalc')
+const SalesPerson = require('../models/SalesPerson')
+const { cleanCode } = require('../utils/sales')
 
 const str = (v, max = 200) => String(v == null ? '' : v).trim().slice(0, max)
 const GSTIN_RE = /^\d{2}[A-Z0-9]{13}$/
@@ -136,6 +138,17 @@ router.get('/checkout-info', auth, async (req, res) => {
     console.error(err)
     res.status(500).json({ error: 'Server error' })
   }
+})
+
+// ─── GET /sales-code/:code ───────────────────────────────────────
+// Checks a sales / referral code typed at checkout and gives back the first name behind it
+router.get('/sales-code/:code', auth, async (req, res) => {
+  try {
+    const code = cleanCode(req.params.code)
+    const person = code ? await SalesPerson.findOne({ code }).lean() : null
+    if (!person || !person.active) return res.json({ valid: false })
+    res.json({ valid: true, code: person.code, name: String(person.name || '').split(/\s+/)[0] })
+  } catch (err) { res.status(500).json({ error: 'Server error' }) }
 })
 
 // ─── POST /quote ─────────────────────────────────────────────────

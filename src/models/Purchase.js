@@ -33,6 +33,7 @@ const purchaseSchema = new mongoose.Schema({
   paymentId: { type: String, default: '', index: true },
   receiptNo: { type: String, default: '' },
   paidAt: { type: Date, default: null },
+  commissionPaidAt: { type: Date, default: null },   // when the salesperson's commission for this payment was paid out
 }, { timestamps: true })
 
 module.exports = mongoose.model('Purchase', purchaseSchema)

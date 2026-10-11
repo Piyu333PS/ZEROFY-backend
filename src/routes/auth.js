@@ -2,7 +2,7 @@ const express = require('express')
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
 const crypto = require('crypto')
-const nodemailer = require('nodemailer')
+const { mailConfigured, sendMail } = require('../utils/mailer')
 const { OAuth2Client } = require('google-auth-library')
 const User = require('../models/User')
 const Invoice = require('../models/Invoice')
@@ -104,24 +104,10 @@ const RESET_CODE_TTL_MS = 10 * 60 * 1000
 const RESET_RESEND_GAP_MS = 60 * 1000
 const RESET_MAX_ATTEMPTS = 5
 
-const mailConfigured = () => Boolean(process.env.SMTP_USER && process.env.SMTP_PASS)
 const normEmail = (v) => String(v || '').trim().toLowerCase()
 const hashCode = (code, userId) =>
   crypto.createHash('sha256').update(`${code}:${userId}:${process.env.JWT_SECRET || ''}`).digest('hex')
 
-let transporter = null
-function getTransporter() {
-  if (!transporter) {
-    const port = Number(process.env.SMTP_PORT) || 465
-    transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'smtp.gmail.com',
-      port,
-      secure: port === 465,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    })
-  }
-  return transporter
-}
 
 const GENERIC_SENT = 'If this email is registered with Zerofy, we have sent it a 6-digit code. The code is valid for 10 minutes.'
 
@@ -223,10 +209,7 @@ router.post('/forgot-password', async (req, res) => {
     })
 
     try {
-      await getTransporter().sendMail({
-        from: process.env.MAIL_FROM || `Zerofy <${process.env.SMTP_USER}>`,
-        // Replies go to the support address even when the mail is sent from another mailbox
-        replyTo: process.env.MAIL_REPLY_TO || 'support@zerofy.co.in',
+      await sendMail({
         to: user.email,
         subject: `${code} — Zerofy password reset code`,
         text: `Your Zerofy password reset code: ${code}\n\nThis code is valid for 10 minutes. If you did not ask to reset your password, ignore this email. Your account is safe.\n\n— Zerofy`,

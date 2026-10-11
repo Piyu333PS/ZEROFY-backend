@@ -6,6 +6,8 @@ const Customer = require('../models/Customer')
 const User = require('../models/User')
 const Item = require('../models/Item')
 const { buildLedger } = require('../utils/ledger')
+const SalesPerson = require('../models/SalesPerson')
+const { isAdminEmail } = require('../utils/sales')
 
 const router = express.Router()
 
@@ -104,9 +106,12 @@ router.get('/bootstrap', auth, async (req, res) => {
 
     const isPro = Boolean(user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date())
     const invoiceCount = (!isPro && user.isPro) ? 0 : (user.invoiceCount || 0)
+    // Extra pages this account may see: the owner's admin panel, or a salesperson's "My sales"
+    const salesPerson = await SalesPerson.findOne({ email: user.email }).lean()
 
     res.json({
       success: true,
+      roles: { admin: isAdminEmail(user.email), sales: Boolean(salesPerson && salesPerson.active) },
       businesses: user.businesses || [],
       invoices: outInvoices,
       quotations: ledger.quotations.map(strip),
@@ -126,6 +131,8 @@ router.get('/bootstrap', auth, async (req, res) => {
         invoiceCount,
         freeLimit: FREE_LIMIT,
         isPro,
+        proExpiry: isPro ? user.proExpiry : null,
+        autoRenew: user.subscriptionStatus === 'active',
         canGenerate: isPro || invoiceCount < FREE_LIMIT,
         remaining: isPro ? 'unlimited' : Math.max(0, FREE_LIMIT - invoiceCount),
       },
