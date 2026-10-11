@@ -160,9 +160,11 @@ router.get('/sales-code/:code', auth, async (req, res) => {
 // ─── POST /quote ─────────────────────────────────────────────────
 // Price break-up for the order summary (plan, coupon, GST, total)
 router.post('/quote', auth, async (req, res) => {
-  const q = quote({ planId: req.body.planId, mode: req.body.mode === 'auto' ? 'auto' : 'once', couponCode: req.body.couponCode, state: req.body.state })
-  if (q.error) return res.status(400).json({ error: q.error })
-  res.json({ success: true, quote: q })
+  try {
+    const q = quote({ planId: req.body.planId, mode: req.body.mode === 'auto' ? 'auto' : 'once', couponCode: req.body.couponCode, coupon: await salesHub.checkCoupon(req.body.couponCode), state: req.body.state })
+    if (q.error) return res.status(400).json({ error: q.error })
+    res.json({ success: true, quote: q })
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Server error' }) }
 })
 
 // ─── POST /checkout ──────────────────────────────────────────────
@@ -174,7 +176,7 @@ router.post('/checkout', auth, async (req, res) => {
     const { billing, problems } = cleanBilling(req.body.billing, req.user.email)
     if (problems.length) return res.status(400).json({ error: problems[0], problems })
 
-    const q = quote({ planId: req.body.planId, mode, couponCode: req.body.couponCode, state: billing.state })
+    const q = quote({ planId: req.body.planId, mode, couponCode: req.body.couponCode, coupon: await salesHub.checkCoupon(req.body.couponCode), state: billing.state })
     if (q.error) return res.status(400).json({ error: q.error })
     if (mode === 'auto' && !(await autoPayAvailable(q.planId, q.total))) {
       return res.status(400).json({ error: 'auto_pay_unavailable', message: 'Auto Pay is not available right now. Please choose one-time payment.' })

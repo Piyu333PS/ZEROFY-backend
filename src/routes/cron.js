@@ -60,6 +60,7 @@ router.get('/daily', async (req, res) => {
   try {
     // Payments that did not reach the Sales Dashboard are sent again
     out.salesSynced = await salesHub.syncPending()
+    out.customersSynced = await salesHub.syncCustomers()
     if (!mailConfigured()) return res.json(out)
     const users = await User.find({ isPro: true }).lean()
     out.checked = users.length

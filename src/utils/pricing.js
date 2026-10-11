@@ -9,15 +9,8 @@ const PLANS = {
 }
 const ON_SALE = ['monthly', 'yearly']
 
-// Coupons work on one-time payments only (Razorpay charges an Auto Pay plan at its fixed price)
-const COUPONS = {
-  ZEROFY10: { discount: 10, type: 'percent', desc: '10% off' },
-  ZEROFY20: { discount: 20, type: 'percent', desc: '20% off' },
-  WELCOME: { discount: 15, type: 'percent', desc: '15% off for new users' },
-  FLAT50: { discount: 50, type: 'flat', desc: '₹50 off' },
-  LAUNCH: { discount: 100, type: 'flat', desc: '₹100 off' },
-}
-
+// Coupons work on one-time payments only (Razorpay charges an Auto Pay plan at its fixed price).
+// Discount codes are made by the owner in the Sales Dashboard; none are written here.
 const GST_RATE = 18
 
 // GST is charged only once the seller's GSTIN is set in the server settings (SELLER_GSTIN).
@@ -36,22 +29,23 @@ function sellerInfo() {
   }
 }
 
-function couponFor(code, base) {
+// `found` is what the Sales Dashboard said about the code: { valid, code, percent } or { valid: false, error }
+function couponFor(code, base, found) {
   const key = String(code || '').trim().toUpperCase()
   if (!key) return { code: '', discount: 0 }
   // A private code for testing a real payment: the price becomes ₹1. It works only while TEST_COUPON is set
   // in the server settings (at least 8 characters), and stops the moment that setting is removed.
   const test = String(process.env.TEST_COUPON || '').trim().toUpperCase()
   if (test.length >= 8 && key === test) return { code: key, discount: Math.max(0, base - 100), desc: 'Test payment' }
-  const c = COUPONS[key]
-  if (!c) return { code: '', discount: 0, error: 'This coupon code is not valid' }
-  let off = c.type === 'percent' ? Math.floor(base * c.discount / 100) : c.discount * 100
-  off = Math.min(off, base - 100) // at least ₹1 stays payable
-  return { code: key, discount: Math.max(0, off), desc: c.desc }
+  if (!found || !found.valid) return { code: '', discount: 0, error: (found && found.error) || 'This coupon code is not valid' }
+  const percent = Math.min(100, Math.max(0, Number(found.percent) || 0))
+  const off = Math.min(Math.floor(base * percent / 100), base - 100) // at least ₹1 stays payable
+  return { code: key, discount: Math.max(0, off), desc: `${percent}% off` }
 }
 
 // Full price break-up for a plan. `state` is the buyer's 2-digit GST state code.
-function quote({ planId, mode = 'once', couponCode = '', state = '' }) {
+// `coupon` is the Sales Dashboard's answer for couponCode (see salesHub.checkCoupon).
+function quote({ planId, mode = 'once', couponCode = '', coupon: found = null, state = '' }) {
   const plan = PLANS[planId]
   if (!plan || !ON_SALE.includes(planId)) return { error: 'Choose a plan' }
   const seller = sellerInfo()
@@ -59,7 +53,7 @@ function quote({ planId, mode = 'once', couponCode = '', state = '' }) {
   let coupon = { code: '', discount: 0 }
   if (String(couponCode || '').trim()) {
     if (mode === 'auto') return { error: 'Coupons work with one-time payment only. Switch to one-time payment to use a coupon.' }
-    coupon = couponFor(couponCode, base)
+    coupon = couponFor(couponCode, base, found)
     if (coupon.error) return { error: coupon.error }
   }
   const taxable = base - coupon.discount
@@ -86,4 +80,4 @@ function financialYear(d = new Date()) {
   return `${String(y).slice(2)}-${String(y + 1).slice(2)}`
 }
 
-module.exports = { PLANS, ON_SALE, COUPONS, GST_RATE, sellerInfo, quote, financialYear }
+module.exports = { PLANS, ON_SALE, GST_RATE, sellerInfo, quote, financialYear }
