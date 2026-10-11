@@ -31,16 +31,16 @@ async function checkCode(code) {
   }
 }
 
-// Send one paid purchase. Only the business name goes across — no phone, email or address.
+// Send one paid purchase — with a sales code, or without one (a direct sale). Only the business name goes across — no phone, email or address.
 async function pushSale(purchase) {
-  if (!configured() || !purchase || purchase.status !== 'paid' || !purchase.salesCode || purchase.salesSyncedAt) return false
+  if (!configured() || !purchase || purchase.status !== 'paid' || purchase.salesSyncedAt) return false
   try {
     // A customer's first payment earns the first-sale rate; every later one is a renewal
     const earlier = await Purchase.find({ userId: purchase.userId, status: 'paid' }).lean()
     const renewal = Boolean(purchase.renewal) || earlier.some(p => String(p._id) !== String(purchase._id) && p.paidAt && new Date(p.paidAt) < new Date(purchase.paidAt))
     const b = purchase.billing || {}
     await call('POST', '/sale', {
-      externalId: String(purchase._id), code: purchase.salesCode,
+      externalId: String(purchase._id), code: purchase.salesCode || '', customerRef: String(purchase.userId),
       customer: b.firm || b.name || '', plan: purchase.planName || purchase.planId,
       amount: purchase.taxable, total: purchase.total, renewal, paidAt: purchase.paidAt,
     })
@@ -55,7 +55,7 @@ async function pushSale(purchase) {
 // Run by the daily job: send anything that did not go through at the time of payment
 async function syncPending(limit = 100) {
   if (!configured()) return 0
-  const waiting = await Purchase.find({ status: 'paid', salesSyncedAt: null, salesCode: { $ne: '' } }).sort({ paidAt: 1 }).lean()
+  const waiting = await Purchase.find({ status: 'paid', salesSyncedAt: null }).sort({ paidAt: 1 }).lean()
   let sent = 0
   for (const p of waiting.slice(0, limit)) if (await pushSale(p)) sent++
   return sent

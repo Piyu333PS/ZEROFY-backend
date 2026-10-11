@@ -58,7 +58,7 @@ router.get('/daily', async (req, res) => {
   if (!allowed(req)) return res.status(401).json({ error: 'Not allowed' })
   const out = { checked: 0, sent: 0, failed: 0, skipped: mailConfigured() ? '' : 'mail is not set up' }
   try {
-    // Payments with a sales code that did not reach the Sales Dashboard are sent again
+    // Payments that did not reach the Sales Dashboard are sent again
     out.salesSynced = await salesHub.syncPending()
     if (!mailConfigured()) return res.json(out)
     const users = await User.find({ isPro: true }).lean()

@@ -95,8 +95,8 @@ async function completePurchase(purchase, paymentId, extraUserFields = {}) {
     isPro: true, proExpiry, freeLimit: 999999, lastPlanId: plan.id,
     lastPaymentId: paymentId || '', invoiceCount: 0, ...extraUserFields,
   })
-  // Tell the Sales Dashboard, so the salesperson's commission shows there. If this fails the daily job sends it again.
-  if (paid && paid.salesCode) await salesHub.pushSale(paid)
+  // Tell the Sales Dashboard (every sale, with or without a sales code). If this fails the daily job sends it again.
+  if (paid) await salesHub.pushSale(paid)
   return { purchase: paid, proExpiry }
 }
 
