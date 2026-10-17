@@ -6,6 +6,7 @@ const Customer = require('../models/Customer')
 const Invoice = require('../models/Invoice')
 const Payment = require('../models/Payment')
 const { buildLedger, docTypeOf } = require('../utils/ledger')
+const { gstinError, escapeRe } = require('../utils/validate')
 
 const router = express.Router()
 
@@ -36,6 +37,20 @@ const cleanCustomer = (body = {}) => {
   if (out.gst) out.gst = String(out.gst).toUpperCase()
   return out
 }
+
+// Another client of this user with the same name (any case) or the same GSTIN
+async function findDuplicate(userId, data, exceptId = null) {
+  const or = []
+  if (data.name) or.push({ name: new RegExp(`^\\s*${escapeRe(data.name)}\\s*$`, 'i') })
+  if (data.gst) or.push({ gst: data.gst })
+  if (!or.length) return null
+  const q = { userId, $or: or }
+  if (exceptId) q._id = { $ne: exceptId }
+  return Customer.findOne(q).lean()
+}
+const duplicateMessage = (dup, data) => (data.gst && dup.gst === data.gst)
+  ? `"${dup.name}" already has this GSTIN`
+  : `A client named "${dup.name}" already exists`
 
 // Purane invoices (jo Clients feature se pehle bane the) ke clients ko Clients list mein le aao.
 // Jin invoices ka customerId null hai, unke naam se client dhundo ya banao, aur invoice link kar do.
@@ -88,8 +103,8 @@ router.get('/', auth, async (req, res) => {
     res.json({
       success: true,
       customers: customers.map(c => {
-        const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0 }
-        return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding }
+        const a = agg[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0, refundDue: 0 }
+        return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding, refundDue: a.refundDue }
       })
     })
   } catch (err) {
@@ -147,6 +162,8 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
 
     const toInsert = []
     const errors = []
+    const existing = await Customer.find({ userId: req.user._id }, { name: 1 }).lean()
+    const seen = new Set(existing.map(c => String(c.name || '').trim().toLowerCase()))
 
     rows.forEach((row, i) => {
       const name = pick(row, nameKeys)
@@ -154,13 +171,23 @@ router.post('/import', auth, upload.single('file'), async (req, res) => {
         errors.push({ row: i + 2, reason: 'Name is missing' }) // +2 = header row + 1-index
         return
       }
+      if (seen.has(name.toLowerCase())) {
+        errors.push({ row: i + 2, reason: 'A client with this name already exists' })
+        return
+      }
+      const gstMsg = gstinError(pick(row, gstKeys))
+      if (gstMsg) {
+        errors.push({ row: i + 2, reason: gstMsg })
+        return
+      }
+      seen.add(name.toLowerCase())
       toInsert.push({
         userId: req.user._id,
         bizId: req.body.bizId || null,
         name,
         phone: pick(row, phoneKeys),
         email: pick(row, emailKeys),
-        gst: pick(row, gstKeys),
+        gst: pick(row, gstKeys).toUpperCase(),
         addr: pick(row, addrKeys)
       })
     })
@@ -208,6 +235,10 @@ router.post('/', auth, async (req, res) => {
   try {
     const data = cleanCustomer(req.body)
     if (!data.name) return res.status(400).json({ error: 'Client name is required' })
+    const gstMsg = gstinError(data.gst)
+    if (gstMsg) return res.status(400).json({ error: gstMsg })
+    const dup = await findDuplicate(req.user._id, data)
+    if (dup) return res.status(409).json({ error: duplicateMessage(dup, data), duplicateId: dup._id })
 
     const customer = new Customer({ ...data, userId: req.user._id })
     await customer.save()
@@ -224,6 +255,10 @@ router.put('/:id', auth, async (req, res) => {
   try {
     const data = cleanCustomer(req.body)
     if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Client name is required' })
+    const gstMsg = gstinError(data.gst)
+    if (gstMsg) return res.status(400).json({ error: gstMsg })
+    const dup = await findDuplicate(req.user._id, data, req.params.id)
+    if (dup) return res.status(409).json({ error: duplicateMessage(dup, data), duplicateId: dup._id })
 
     const customer = await Customer.findOneAndUpdate(
       { _id: req.params.id, userId: req.user._id },

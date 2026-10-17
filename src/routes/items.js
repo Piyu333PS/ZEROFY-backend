@@ -1,7 +1,7 @@
 const express = require('express')
 const auth = require('../middleware/authLite')
 const Item = require('../models/Item')
-const { cleanItem } = require('../utils/catalog')
+const { cleanItem, itemError } = require('../utils/catalog')
 
 const router = express.Router()
 
@@ -19,6 +19,8 @@ router.get('/', auth, async (req, res) => {
 // ─── POST /api/items ───────────────────────────────────────────
 router.post('/', auth, async (req, res) => {
   try {
+    const bad = itemError(req.body)
+    if (bad) return res.status(400).json({ error: bad })
     const data = cleanItem(req.body)
     if (!data.name) return res.status(400).json({ error: 'Item name is required' })
 
@@ -38,8 +40,16 @@ router.post('/', auth, async (req, res) => {
 // ─── PUT /api/items/:id ────────────────────────────────────────
 router.put('/:id', auth, async (req, res) => {
   try {
+    const bad = itemError(req.body)
+    if (bad) return res.status(400).json({ error: bad })
     const data = cleanItem(req.body)
     if (data.name !== undefined && !data.name) return res.status(400).json({ error: 'Item name is required' })
+    if (data.name) {
+      const others = await Item.find({ userId: req.user._id, _id: { $ne: req.params.id } }, { name: 1 }).lean()
+      if (others.some(i => String(i.name).trim().toLowerCase() === data.name.toLowerCase())) {
+        return res.status(409).json({ error: 'An item with this name is already saved' })
+      }
+    }
     const item = await Item.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, data, { new: true })
     if (!item) return res.status(404).json({ error: 'Item not found' })
     res.json({ success: true, item })

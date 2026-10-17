@@ -37,23 +37,27 @@ router.get('/me', auth, async (req, res) => {
 router.post('/change-email', auth, async (req, res) => {
   try {
     const { newEmail, password } = req.body
-    if (!newEmail || !password) return res.status(400).json({ error: 'Email and password are both required' })
+    // Logged in with Google in the last hour: Google has just confirmed who this is, so the
+    // password is not asked (the same rule as set-password). Otherwise the password is needed.
+    const viaGoogle = googleFresh(req.auth)
+    if (!newEmail || (!password && !viaGoogle)) return res.status(400).json({ error: 'Email and password are both required' })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(newEmail).trim())) return res.status(400).json({ error: 'Email is not valid' })
 
     const user = await User.findById(req.user._id)
     if (!user) return res.status(404).json({ error: 'Account not found' })
 
-    // Google se login karne wale users ka password nahi hota
-    if (!user.password) return res.status(400).json({ error: 'You log in with Google, so the email cannot be changed here' })
-
-    // Password verify karo
-    const match = await bcrypt.compare(password, user.password)
-    if (!match) return res.status(400).json({ error: 'Password is incorrect' })
+    if (!viaGoogle) {
+      // Google se login karne wale users ka password nahi hota
+      if (!user.password) return res.status(400).json({ error: 'You log in with Google. Log out, log in with Google again, then change the email within an hour.' })
+      const match = await bcrypt.compare(password, user.password)
+      if (!match) return res.status(400).json({ error: 'Password is incorrect' })
+    }
 
     // Check karo naya email already exist toh nahi karta
-    const existing = await User.findOne({ email: newEmail.toLowerCase() })
+    const existing = await User.findOne({ email: String(newEmail).trim().toLowerCase() })
     if (existing) return res.status(400).json({ error: 'This email is already in use' })
 
-    user.email = newEmail.toLowerCase()
+    user.email = String(newEmail).trim().toLowerCase()
     await user.save()
 
     res.json({ success: true, message: 'Email updated.', email: user.email })

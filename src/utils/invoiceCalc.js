@@ -41,7 +41,21 @@ function calcInvoice(inv = {}) {
       return { ...it, qty, rate, gross: r2(gross), taxable: r2(taxable), gstRate, gstAmt: r2(gstAmt), total: r2(taxable + gstAmt) }
     })
   const inter = isInterState(inv)
-  const shipping = Math.max(0, Number(inv.shipping) || 0)
+  let shipping = Math.max(0, Number(inv.shipping) || 0)
+  // Shipping / packing charged by the seller is part of the taxable value under GST (section 15)
+  // and takes the rate of the main goods. With "GST on shipping" ticked it becomes its own taxed
+  // line, so the preview, PDF, GST summary and GSTR-1 all include it. Off by default, so older
+  // invoices keep exactly the same total.
+  if (inv.shippingTaxable && shipping > 0) {
+    const gstRate = lines.length ? Math.max(...lines.map(l => l.gstRate)) : 18
+    const gstAmt = shipping * gstRate / 100
+    lines.push({
+      desc: 'Shipping / other charges', type: 'service', hsnSac: '9965', uqc: 'OTH', isCharge: true,
+      qty: 1, rate: r2(shipping), gross: r2(shipping), taxable: r2(shipping), gstRate, gstAmt: r2(gstAmt), total: r2(shipping + gstAmt),
+    })
+    sub += shipping; gst += gstAmt
+    shipping = 0
+  }
   const raw = sub - disc + gst + shipping
   const total = inv.roundOff ? Math.round(raw) : r2(raw)
   return {
