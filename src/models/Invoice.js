@@ -57,8 +57,13 @@ const invoiceSchema = new mongoose.Schema({
   discPct: { type: Number, default: 0 },
   taxPct: { type: Number, default: 18 },
   shipping: { type: Number, default: 0 },
+  shippingTaxable: { type: Boolean, default: false }, // charge GST on shipping at the main item rate
   roundOff: { type: Boolean, default: false },
   grandTotal: { type: Number, default: 0 },       // server-side calculated, har save par update hota hai
+  // Free plan: has this invoice used up one of the free invoices? A draft does not (so a free
+  // user who has used them all can still save their work); it counts when it is issued.
+  // Older invoices do not have the field — they were all counted when saved.
+  usageCounted: { type: Boolean },
 
   // Quotation only
   validTill: { type: String, default: '' },
