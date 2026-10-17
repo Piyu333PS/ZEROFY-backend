@@ -15,7 +15,7 @@ function itemError(body = {}) {
     return 'Rate cannot be negative'
   }
   if (body.gstRate !== undefined && body.gstRate !== '' && !GST_RATES.includes(Number(body.gstRate))) {
-    return `GST % must be one of ${GST_RATES.join(', ')}`
+    return `GST rate is not valid. Use one of: ${GST_RATES.join('%, ')}%`
   }
   const code = String(body.hsnSac || '').trim()
   if (code) {
