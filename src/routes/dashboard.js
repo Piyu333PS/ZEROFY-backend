@@ -100,8 +100,8 @@ router.get('/bootstrap', auth, async (req, res) => {
     const strip = ({ bizLogo, ...rest }) => rest
     const outInvoices = ledger.invoices.map(strip)
     const outCustomers = customers.map(c => {
-      const a = ledger.byCustomer[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0 }
-      return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding }
+      const a = ledger.byCustomer[String(c._id)] || { invoiceCount: 0, billed: 0, received: 0, outstanding: 0, refundDue: 0 }
+      return { ...c, invoiceCount: a.invoiceCount, billed: a.billed, received: a.received, outstanding: a.outstanding, refundDue: a.refundDue }
     })
 
     const isPro = Boolean(user.isPro && user.proExpiry && new Date(user.proExpiry) > new Date())

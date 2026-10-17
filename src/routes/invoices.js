@@ -27,7 +27,7 @@ const INVOICE_FIELDS = [
   'no', 'date', 'dueDate', 'poNumber', 'status', 'template', 'currency',
   'bizId', 'bizName', 'bizEmail', 'bizPhone', 'bizAltPhone', 'bizAltEmail', 'bizGst', 'bizAddr', 'bizLogo',
   'clientName', 'clientEmail', 'clientPhone', 'clientGst', 'clientAddr', 'placeOfSupply',
-  'items', 'discPct', 'taxPct', 'shipping', 'roundOff',
+  'items', 'discPct', 'taxPct', 'shipping', 'shippingTaxable', 'roundOff',
   'notes', 'terms', 'bankDetails', 'upiId', 'signatory',
   'validTill', 'reason',
 ]
@@ -56,6 +56,7 @@ function cleanInvoiceBody(body = {}, docType = 'invoice') {
   if (out.taxPct !== undefined) out.taxPct = num(out.taxPct, 18)
   if (out.shipping !== undefined) out.shipping = Math.max(0, num(out.shipping))
   if (out.roundOff !== undefined) out.roundOff = Boolean(out.roundOff)
+  if (out.shippingTaxable !== undefined) out.shippingTaxable = Boolean(out.shippingTaxable)
   // Logo har invoice ke saath store nahi hota (list bhaari ho jati thi) — wo business profile se aata hai
   if (out.bizLogo !== undefined) out.bizLogo = ''
   if (out.items !== undefined) {
@@ -315,8 +316,11 @@ router.post('/', auth, async (req, res) => {
       } else quotation = null
     }
 
-    // Only invoices count towards the free plan — quotations and credit notes are free
-    const countUsage = docType === 'invoice' && req.body.countUsage === true
+    // Only invoices count towards the free plan — quotations and credit notes are free.
+    // A draft invoice does not count yet; it is counted when it is issued (see PUT).
+    const wantsUsage = docType === 'invoice' && req.body.countUsage === true
+    const countUsage = wantsUsage && data.status !== 'draft'
+    if (wantsUsage) data.usageCounted = countUsage
     let invoiceCount
     if (countUsage) {
       const user = await User.findById(req.user._id)
@@ -408,6 +412,23 @@ router.put('/:id', auth, async (req, res) => {
     const total = calcInvoice(merged).total
     data.grandTotal = total
 
+    // A draft that did not use a free invoice uses one now that it is being issued
+    let countNow = false
+    if (docType === 'invoice' && current.usageCounted === false && !['draft', 'cancelled'].includes(merged.status)) {
+      const user = await User.findById(req.user._id)
+      const isPro = await refreshProState(user)
+      if (!isPro && (user.invoiceCount || 0) >= FREE_LIMIT) {
+        return res.status(403).json({
+          error: 'free_limit_reached',
+          message: `The free plan includes ${FREE_LIMIT} invoices. Upgrade to Pro to issue this invoice — it stays saved as a draft.`,
+          invoiceCount: user.invoiceCount,
+          freeLimit: FREE_LIMIT
+        })
+      }
+      countNow = !isPro
+      data.usageCounted = true
+    }
+
     if (docType === 'credit_note' && merged.status !== 'cancelled') {
       const check = await checkCreditNote(req.user._id, merged, current.refInvoiceId, current._id)
       if (check.error) return res.status(400).json({ error: check.error })
@@ -442,6 +463,7 @@ router.put('/:id', auth, async (req, res) => {
       data,
       { new: true }
     ).lean()
+    if (countNow) await User.findByIdAndUpdate(req.user._id, { $inc: { invoiceCount: 1 } })
     if (docType === 'credit_note') await syncRefInvoice(req.user._id, current.refInvoiceId)
     res.json({ success: true, invoice: await decorateOne(req.user._id, invoice) })
   } catch (err) {
