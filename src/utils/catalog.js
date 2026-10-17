@@ -5,6 +5,28 @@ const num = (v, fallback = 0) => {
   return isNaN(n) ? fallback : n
 }
 
+// GST rates the app offers. 40% is the GST 2.0 slab (from 22 Sep 2025); 12% and 28%
+// stay for older invoices and the few goods still billed at those rates.
+const GST_RATES = [0, 0.1, 0.25, 1.5, 3, 5, 7.5, 12, 18, 28, 40]
+
+// '' when the item can be saved, otherwise what is wrong (checked before cleanItem clamps values)
+function itemError(body = {}) {
+  if (body.rate !== undefined && body.rate !== '' && (isNaN(Number(body.rate)) || Number(body.rate) < 0)) {
+    return 'Rate cannot be negative'
+  }
+  if (body.gstRate !== undefined && body.gstRate !== '' && !GST_RATES.includes(Number(body.gstRate))) {
+    return `GST % must be one of ${GST_RATES.join(', ')}`
+  }
+  const code = String(body.hsnSac || '').trim()
+  if (code) {
+    if (!/^\d+$/.test(code)) return 'HSN / SAC code must contain digits only'
+    if (body.type === 'service' ? !/^99\d{4}$/.test(code) : ![4, 6, 8].includes(code.length)) {
+      return body.type === 'service' ? 'SAC code must be 6 digits and start with 99' : 'HSN code must be 4, 6 or 8 digits'
+    }
+  }
+  return ''
+}
+
 const cleanItem = (body = {}) => {
   const out = {}
   if (body.name !== undefined) out.name = String(body.name).trim().slice(0, 200)
@@ -57,4 +79,4 @@ async function rememberItems(userId, lines) {
   }
 }
 
-module.exports = { cleanItem, rememberItems }
+module.exports = { cleanItem, rememberItems, itemError, GST_RATES }

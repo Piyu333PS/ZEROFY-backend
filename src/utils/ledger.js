@@ -37,6 +37,9 @@ function decorateInvoice(inv, paidMap = {}, creditMap = {}) {
     paidAmount: paid,
     creditedAmount: credited,
     balance: r2(Math.max(0, total - paid - credited)),
+    // Paid in full and then reduced by a credit note: the client has paid more than the
+    // invoice is now worth, and that much is owed back to them (refund or adjust later).
+    refundDue: r2(Math.max(0, paid + credited - total)),
   }
 }
 
@@ -48,7 +51,7 @@ function buildLedger(docs, payments) {
   const creditMap = creditMapOf(docs)
   const invoices = [], quotations = [], creditNotes = []
   const byCustomer = {}
-  let totalInvoiced = 0, received = 0, pending = 0
+  let totalInvoiced = 0, received = 0, pending = 0, refundDue = 0
 
   for (const doc of docs) {
     const type = docTypeOf(doc)
@@ -61,22 +64,24 @@ function buildLedger(docs, payments) {
     totalInvoiced += net
     received += inv.paidAmount
     pending += inv.balance
+    refundDue += inv.refundDue
     if (inv.customerId) {
       const k = String(inv.customerId)
-      if (!byCustomer[k]) byCustomer[k] = { invoiceCount: 0, billed: 0, received: 0, outstanding: 0 }
+      if (!byCustomer[k]) byCustomer[k] = { invoiceCount: 0, billed: 0, received: 0, outstanding: 0, refundDue: 0 }
       byCustomer[k].invoiceCount += 1
       byCustomer[k].billed += net
       byCustomer[k].received += inv.paidAmount
       byCustomer[k].outstanding += inv.balance
+      byCustomer[k].refundDue += inv.refundDue
     }
   }
   for (const k of Object.keys(byCustomer)) {
     const a = byCustomer[k]
-    a.billed = r2(a.billed); a.received = r2(a.received); a.outstanding = r2(a.outstanding)
+    a.billed = r2(a.billed); a.received = r2(a.received); a.outstanding = r2(a.outstanding); a.refundDue = r2(a.refundDue)
   }
   return {
     invoices, quotations, creditNotes, byCustomer,
-    totals: { totalInvoiced: r2(totalInvoiced), received: r2(received), pending: r2(pending) },
+    totals: { totalInvoiced: r2(totalInvoiced), received: r2(received), pending: r2(pending), refundDue: r2(refundDue) },
   }
 }
 
