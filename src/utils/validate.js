@@ -14,14 +14,14 @@ function gstinCheckChar(first14) {
   return GST_CHARS[(36 - (sum % 36)) % 36]
 }
 
-// '' when fine (or empty), otherwise what is wrong
+// '' when fine (or empty), otherwise a short message a user understands
 function gstinError(raw) {
   const v = String(raw || '').trim().toUpperCase()
   if (!v) return ''
-  if (v.length !== 15) return `GSTIN must be 15 characters (got ${v.length})`
-  if (!GSTIN_RE.test(v)) return 'GSTIN format is not right (for example 22AAAAA0000A1Z5)'
-  if (!validState(Number(v.slice(0, 2)))) return `"${v.slice(0, 2)}" is not a valid GST state code`
-  if (gstinCheckChar(v) !== v[14]) return 'GSTIN has a typo — its last character does not match'
+  if (v.length !== 15) return 'GSTIN must be 15 characters'
+  if (!GSTIN_RE.test(v) || !validState(Number(v.slice(0, 2))) || gstinCheckChar(v) !== v[14]) {
+    return 'GSTIN is not valid. Please check the number'
+  }
   return ''
 }
 
